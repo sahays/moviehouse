@@ -31,10 +31,8 @@ impl MagnetLink {
         }
 
         let query = &uri["magnet:?".len()..];
-        let params: Vec<(&str, &str)> = query
-            .split('&')
-            .filter_map(|p| p.split_once('='))
-            .collect();
+        let params: Vec<(&str, &str)> =
+            query.split('&').filter_map(|p| p.split_once('=')).collect();
 
         let mut info_hash = None;
         let mut display_name = None;
@@ -114,7 +112,10 @@ mod tests {
         let magnet = MagnetLink::parse(uri).unwrap();
         assert_eq!(magnet.display_name.as_deref(), Some("test"));
         assert_eq!(magnet.trackers.len(), 1);
-        assert_eq!(magnet.info_hash.to_string(), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(
+            magnet.info_hash.to_string(),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        );
     }
 
     #[test]

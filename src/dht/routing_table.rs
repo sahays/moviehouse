@@ -15,8 +15,8 @@ impl NodeId {
     /// XOR distance between two IDs.
     pub fn distance(&self, other: &NodeId) -> NodeId {
         let mut d = [0u8; 20];
-        for i in 0..20 {
-            d[i] = self.0[i] ^ other.0[i];
+        for (i, d_byte) in d.iter_mut().enumerate() {
+            *d_byte = self.0[i] ^ other.0[i];
         }
         NodeId(d)
     }
@@ -141,7 +141,11 @@ impl RoutingTable {
         }
 
         // Bucket full — try to replace a bad node
-        if let Some(bad_idx) = bucket.nodes.iter().position(|n| n.status == NodeStatus::Bad) {
+        if let Some(bad_idx) = bucket
+            .nodes
+            .iter()
+            .position(|n| n.status == NodeStatus::Bad)
+        {
             bucket.nodes[bad_idx] = NodeEntry {
                 id,
                 addr,
@@ -218,13 +222,17 @@ impl RoutingTable {
 
     /// Save non-bad nodes to a JSON file for persistent DHT bootstrap.
     pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let nodes: Vec<serde_json::Value> = self.buckets.iter()
+        let nodes: Vec<serde_json::Value> = self
+            .buckets
+            .iter()
             .flat_map(|b| b.nodes.iter())
             .filter(|n| n.status != NodeStatus::Bad)
-            .map(|n| serde_json::json!({
-                "id": hex::encode(n.id.0),
-                "addr": n.addr.to_string(),
-            }))
+            .map(|n| {
+                serde_json::json!({
+                    "id": hex::encode(n.id.0),
+                    "addr": n.addr.to_string(),
+                })
+            })
             .collect();
         let data = serde_json::json!({
             "own_id": hex::encode(self.own_id.0),
@@ -244,16 +252,21 @@ impl RoutingTable {
 
         let own_id_hex = json["own_id"].as_str()?;
         let own_id_bytes = hex::decode(own_id_hex).ok()?;
-        if own_id_bytes.len() != 20 { return None; }
+        if own_id_bytes.len() != 20 {
+            return None;
+        }
         let mut own_id = [0u8; 20];
         own_id.copy_from_slice(&own_id_bytes);
 
-        let nodes: Vec<(NodeId, SocketAddr)> = json["nodes"].as_array()?
+        let nodes: Vec<(NodeId, SocketAddr)> = json["nodes"]
+            .as_array()?
             .iter()
             .filter_map(|n| {
                 let id_hex = n["id"].as_str()?;
                 let id_bytes = hex::decode(id_hex).ok()?;
-                if id_bytes.len() != 20 { return None; }
+                if id_bytes.len() != 20 {
+                    return None;
+                }
                 let mut id = [0u8; 20];
                 id.copy_from_slice(&id_bytes);
                 let addr: SocketAddr = n["addr"].as_str()?.parse().ok()?;

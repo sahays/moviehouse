@@ -46,11 +46,7 @@ pub struct DiskHandle {
 
 impl DiskHandle {
     /// Write a verified piece to disk.
-    pub async fn write_piece(
-        &self,
-        piece_index: u32,
-        data: Vec<u8>,
-    ) -> Result<DiskResult, String> {
+    pub async fn write_piece(&self, piece_index: u32, data: Vec<u8>) -> Result<DiskResult, String> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(DiskCommand::WritePiece {
@@ -70,11 +66,7 @@ impl DiskHandle {
     }
 
     /// Read a piece from disk (for seeding or resume verification).
-    pub async fn read_piece(
-        &self,
-        piece_index: u32,
-        length: u32,
-    ) -> Result<Vec<u8>, String> {
+    pub async fn read_piece(&self, piece_index: u32, length: u32) -> Result<Vec<u8>, String> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(DiskCommand::ReadPiece {
@@ -148,33 +140,43 @@ impl DiskManager {
 
     async fn process_command_with_sync(&self, cmd: DiskCommand, sync: bool) {
         match cmd {
-            DiskCommand::WritePiece { piece_index, data, response } => {
+            DiskCommand::WritePiece {
+                piece_index,
+                data,
+                response,
+            } => {
                 let spans = self.mapping.piece_spans(piece_index);
-                let result = tokio::task::spawn_blocking(move || {
-                    write_piece_blocking(&spans, &data, sync)
-                }).await;
+                let result =
+                    tokio::task::spawn_blocking(move || write_piece_blocking(&spans, &data, sync))
+                        .await;
 
                 let disk_result = match result {
                     Ok(Ok(())) => DiskResult::Ok { piece_index },
                     Ok(Err(e)) => {
                         error!(piece = piece_index, error = %e, "Disk write failed");
-                        DiskResult::Error { piece_index, error: e.to_string() }
+                        DiskResult::Error {
+                            piece_index,
+                            error: e.to_string(),
+                        }
                     }
-                    Err(e) => {
-                        DiskResult::Error { piece_index, error: e.to_string() }
-                    }
+                    Err(e) => DiskResult::Error {
+                        piece_index,
+                        error: e.to_string(),
+                    },
                 };
                 let _ = response.send(disk_result);
             }
-            DiskCommand::ReadPiece { piece_index, length, response } => {
+            DiskCommand::ReadPiece {
+                piece_index,
+                length,
+                response,
+            } => {
                 let spans = self.mapping.piece_spans(piece_index);
-                let result = tokio::task::spawn_blocking(move || {
-                    read_piece_blocking(&spans, length)
-                }).await;
+                let result =
+                    tokio::task::spawn_blocking(move || read_piece_blocking(&spans, length)).await;
 
-                let _ = response.send(result.unwrap_or_else(|e| {
-                    Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-                }));
+                let _ = response
+                    .send(result.unwrap_or_else(|e| Err(std::io::Error::other(e.to_string()))));
             }
             DiskCommand::PreAllocate => {
                 let files = self.mapping.files_for_allocation();
@@ -203,6 +205,7 @@ fn write_piece_blocking(spans: &[FileSpan], data: &[u8], sync: bool) -> Result<(
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&span.file_path)?;
 
         file.seek(SeekFrom::Start(span.offset))?;
@@ -240,6 +243,7 @@ fn pre_allocate_file(path: &Path, length: u64) -> Result<(), std::io::Error> {
     let file = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)?;
 
     file.set_len(length)?;

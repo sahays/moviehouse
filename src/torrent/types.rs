@@ -15,7 +15,7 @@ impl Sha1Hash {
 
     /// URL-encode the hash for tracker requests (percent-encoding of raw bytes).
     pub fn url_encode(&self) -> String {
-        use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
+        use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
         percent_encode(&self.0, NON_ALPHANUMERIC).to_string()
     }
 }

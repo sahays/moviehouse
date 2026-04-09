@@ -13,6 +13,7 @@ const ACTION_CONNECT: u32 = 0;
 const ACTION_ANNOUNCE: u32 = 1;
 
 /// UDP tracker announce (BEP15).
+#[allow(clippy::too_many_arguments)]
 pub async fn udp_announce(
     tracker_url: &str,
     info_hash: &InfoHash,
@@ -115,6 +116,7 @@ async fn udp_connect(socket: &UdpSocket) -> Result<u64, TrackerError> {
     Err(TrackerError::Timeout)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn udp_announce_request(
     socket: &UdpSocket,
     connection_id: u64,

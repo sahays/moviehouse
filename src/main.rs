@@ -65,11 +65,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_download(
-    metainfo: Metainfo,
-    cli: &Cli,
-    no_dht: bool,
-) -> anyhow::Result<()> {
+async fn cmd_download(metainfo: Metainfo, cli: &Cli, no_dht: bool) -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
@@ -97,11 +93,7 @@ async fn cmd_download(
     session.run().await
 }
 
-async fn cmd_magnet(
-    magnet: MagnetLink,
-    cli: &Cli,
-    no_dht: bool,
-) -> anyhow::Result<()> {
+async fn cmd_magnet(magnet: MagnetLink, cli: &Cli, no_dht: bool) -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
@@ -123,7 +115,8 @@ async fn cmd_magnet(
     )
     .await?;
 
-    eprintln!("Starting download: {} ({:.2} MiB)",
+    eprintln!(
+        "Starting download: {} ({:.2} MiB)",
         metainfo.info.name,
         metainfo.info.total_length as f64 / (1024.0 * 1024.0),
     );

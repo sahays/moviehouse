@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 use super::krpc::{KrpcQuery, KrpcResponse, KrpcSocket};
 use super::routing_table::{NodeId, RoutingTable};
@@ -76,16 +76,19 @@ pub async fn iterative_get_peers(
                     Ok(resp) => {
                         // Handle any response type (decode can't reliably distinguish)
                         let (id, token, peers, nodes) = match resp {
-                            KrpcResponse::GetPeers { id, token, peers, nodes } => (id, token, peers, nodes),
+                            KrpcResponse::GetPeers {
+                                id,
+                                token,
+                                peers,
+                                nodes,
+                            } => (id, token, peers, nodes),
                             KrpcResponse::FindNode { id, nodes } => (id, None, vec![], nodes),
                             KrpcResponse::Ping { id } => (id, None, vec![], vec![]),
                             _ => continue,
                         };
 
                         // Mark as responded
-                        if let Some(c) =
-                            candidates.iter_mut().find(|(cid, _, _)| *cid == node_id)
-                        {
+                        if let Some(c) = candidates.iter_mut().find(|(cid, _, _)| *cid == node_id) {
                             c.2 = CandidateState::Responded;
                         }
 
@@ -110,9 +113,7 @@ pub async fn iterative_get_peers(
                         }
                     }
                     Err(_) => {
-                        if let Some(c) =
-                            candidates.iter_mut().find(|(cid, _, _)| *cid == node_id)
-                        {
+                        if let Some(c) = candidates.iter_mut().find(|(cid, _, _)| *cid == node_id) {
                             c.2 = CandidateState::Failed;
                         }
                         routing_table.write().await.mark_failed(&node_id);
@@ -134,10 +135,10 @@ pub async fn iterative_get_peers(
             .map(|(id, _, _)| id.distance(&target))
             .min();
 
-        if let (Some(resp_dist), Some(unq_dist)) = (closest_responded, closest_unqueried) {
-            if unq_dist.0 >= resp_dist.0 {
-                break; // No closer nodes to explore
-            }
+        if let (Some(resp_dist), Some(unq_dist)) = (closest_responded, closest_unqueried)
+            && unq_dist.0 >= resp_dist.0
+        {
+            break; // No closer nodes to explore
         }
     }
 
@@ -152,10 +153,8 @@ pub async fn iterative_find_node(
 ) {
     let initial_nodes = routing_table.read().await.closest_nodes(&target, K);
     let mut queried: HashSet<NodeId> = HashSet::new();
-    let mut candidates: Vec<(NodeId, SocketAddr)> = initial_nodes
-        .into_iter()
-        .map(|n| (n.id, n.addr))
-        .collect();
+    let mut candidates: Vec<(NodeId, SocketAddr)> =
+        initial_nodes.into_iter().map(|n| (n.id, n.addr)).collect();
 
     for _ in 0..30 {
         // Sort by distance to target

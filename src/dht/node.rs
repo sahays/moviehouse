@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -116,10 +116,7 @@ impl DhtHandle {
 
     /// Request peer discovery for an info_hash.
     /// Returns a receiver that will stream peer batches as they're found.
-    pub async fn get_peers(
-        &self,
-        info_hash: InfoHash,
-    ) -> mpsc::Receiver<Vec<SocketAddr>> {
+    pub async fn get_peers(&self, info_hash: InfoHash) -> mpsc::Receiver<Vec<SocketAddr>> {
         let (peer_tx, peer_rx) = mpsc::channel(32);
         let _ = self
             .lookup_tx
@@ -229,10 +226,7 @@ async fn handle_inbound(
             KrpcResponse::FindNode { id: own_id, nodes }
         }
         KrpcQuery::GetPeers { info_hash } => {
-            let token = token_manager
-                .lock()
-                .await
-                .generate(&query.sender_addr.ip());
+            let token = token_manager.lock().await.generate(&query.sender_addr.ip());
             let target = NodeId(info_hash.0);
             let nodes: Vec<(NodeId, SocketAddr)> = routing_table
                 .read()
@@ -251,7 +245,10 @@ async fn handle_inbound(
         KrpcQuery::AnnouncePeer { .. } => KrpcResponse::AnnouncePeer { id: own_id },
     };
 
-    if let Err(e) = krpc.respond(query.sender_addr, &query.txn_id, response).await {
+    if let Err(e) = krpc
+        .respond(query.sender_addr, &query.txn_id, response)
+        .await
+    {
         debug!(error = %e, "Failed to send KRPC response");
     }
 }
@@ -264,10 +261,10 @@ async fn bootstrap(krpc: &Arc<KrpcSocket>, routing_table: &Arc<RwLock<RoutingTab
     // Resolve all bootstrap nodes concurrently
     let mut addrs: Vec<(String, SocketAddr)> = Vec::new();
     for node_str in BOOTSTRAP_NODES {
-        if let Ok(mut resolved) = tokio::net::lookup_host(node_str).await {
-            if let Some(addr) = resolved.next() {
-                addrs.push((node_str.to_string(), addr));
-            }
+        if let Ok(mut resolved) = tokio::net::lookup_host(node_str).await
+            && let Some(addr) = resolved.next()
+        {
+            addrs.push((node_str.to_string(), addr));
         }
     }
 

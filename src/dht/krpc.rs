@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -24,23 +24,38 @@ fn next_txn_id() -> [u8; 2] {
 #[derive(Debug)]
 pub enum KrpcQuery {
     Ping,
-    FindNode { target: NodeId },
-    GetPeers { info_hash: InfoHash },
-    AnnouncePeer { info_hash: InfoHash, port: u16, token: Vec<u8> },
+    FindNode {
+        target: NodeId,
+    },
+    GetPeers {
+        info_hash: InfoHash,
+    },
+    AnnouncePeer {
+        info_hash: InfoHash,
+        port: u16,
+        token: Vec<u8>,
+    },
 }
 
 /// KRPC response data.
 #[derive(Debug)]
 pub enum KrpcResponse {
-    Ping { id: NodeId },
-    FindNode { id: NodeId, nodes: Vec<(NodeId, SocketAddr)> },
+    Ping {
+        id: NodeId,
+    },
+    FindNode {
+        id: NodeId,
+        nodes: Vec<(NodeId, SocketAddr)>,
+    },
     GetPeers {
         id: NodeId,
         token: Option<Vec<u8>>,
         peers: Vec<SocketAddr>,
         nodes: Vec<(NodeId, SocketAddr)>,
     },
-    AnnouncePeer { id: NodeId },
+    AnnouncePeer {
+        id: NodeId,
+    },
 }
 
 /// Inbound query from a remote node.
@@ -96,7 +111,7 @@ impl KrpcSocket {
         self.socket
             .send_to(&msg, dest)
             .await
-            .map_err(|e| KrpcError::Io(e))?;
+            .map_err(KrpcError::Io)?;
 
         match tokio::time::timeout(Duration::from_secs(5), rx).await {
             Ok(Ok(response)) => Ok(response),
@@ -163,10 +178,10 @@ impl KrpcSocket {
                 // Response to our query
                 if txn_id.len() == 2 {
                     let key = [txn_id[0], txn_id[1]];
-                    if let Some((_, tx)) = self.pending.remove(&key) {
-                        if let Some(response) = self.decode_response(&val) {
-                            let _ = tx.send(response);
-                        }
+                    if let Some((_, tx)) = self.pending.remove(&key)
+                        && let Some(response) = self.decode_response(&val)
+                    {
+                        let _ = tx.send(response);
                     }
                 }
             }
@@ -188,12 +203,15 @@ impl KrpcSocket {
                         })
                         .unwrap_or(NodeId([0; 20]));
 
-                    let _ = self.inbound_tx.send(InboundQuery {
-                        query,
-                        sender_id,
-                        sender_addr: addr,
-                        txn_id: txn_id.to_vec(),
-                    }).await;
+                    let _ = self
+                        .inbound_tx
+                        .send(InboundQuery {
+                            query,
+                            sender_id,
+                            sender_addr: addr,
+                            txn_id: txn_id.to_vec(),
+                        })
+                        .await;
                 }
             }
             "e" => {
@@ -231,7 +249,11 @@ impl KrpcSocket {
                 dict.insert(b"q".to_vec(), BValue::Bytes(b"get_peers".to_vec()));
                 args.insert(b"info_hash".to_vec(), BValue::Bytes(info_hash.0.to_vec()));
             }
-            KrpcQuery::AnnouncePeer { info_hash, port, token } => {
+            KrpcQuery::AnnouncePeer {
+                info_hash,
+                port,
+                token,
+            } => {
                 dict.insert(b"q".to_vec(), BValue::Bytes(b"announce_peer".to_vec()));
                 args.insert(b"info_hash".to_vec(), BValue::Bytes(info_hash.0.to_vec()));
                 args.insert(b"port".to_vec(), BValue::Int(*port as i64));
@@ -256,9 +278,17 @@ impl KrpcSocket {
         match response {
             KrpcResponse::Ping { .. } => {}
             KrpcResponse::FindNode { nodes, .. } => {
-                r.insert(b"nodes".to_vec(), BValue::Bytes(encode_compact_nodes(nodes)));
+                r.insert(
+                    b"nodes".to_vec(),
+                    BValue::Bytes(encode_compact_nodes(nodes)),
+                );
             }
-            KrpcResponse::GetPeers { token, peers, nodes, .. } => {
+            KrpcResponse::GetPeers {
+                token,
+                peers,
+                nodes,
+                ..
+            } => {
                 if let Some(token) = token {
                     r.insert(b"token".to_vec(), BValue::Bytes(token.clone()));
                 }
@@ -270,7 +300,10 @@ impl KrpcSocket {
                     r.insert(b"values".to_vec(), BValue::List(values));
                 }
                 if !nodes.is_empty() {
-                    r.insert(b"nodes".to_vec(), BValue::Bytes(encode_compact_nodes(nodes)));
+                    r.insert(
+                        b"nodes".to_vec(),
+                        BValue::Bytes(encode_compact_nodes(nodes)),
+                    );
                 }
             }
             KrpcResponse::AnnouncePeer { .. } => {}
@@ -393,15 +426,15 @@ fn encode_compact_nodes(nodes: &[(NodeId, SocketAddr)]) -> Vec<u8> {
 
 fn decode_compact_nodes(data: &[u8]) -> Vec<(NodeId, SocketAddr)> {
     data.chunks_exact(26)
-        .filter_map(|chunk| {
+        .map(|chunk| {
             let mut id = [0u8; 20];
             id.copy_from_slice(&chunk[..20]);
             let ip = std::net::Ipv4Addr::new(chunk[20], chunk[21], chunk[22], chunk[23]);
             let port = u16::from_be_bytes([chunk[24], chunk[25]]);
-            Some((
+            (
                 NodeId(id),
                 SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)),
-            ))
+            )
         })
         .collect()
 }

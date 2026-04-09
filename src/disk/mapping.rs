@@ -106,6 +106,9 @@ impl FileMapping {
 
     /// Get all files with their lengths for pre-allocation.
     pub fn files_for_allocation(&self) -> Vec<(&Path, u64)> {
-        self.files.iter().map(|f| (f.path.as_path(), f.length)).collect()
+        self.files
+            .iter()
+            .map(|f| (f.path.as_path(), f.length))
+            .collect()
     }
 }

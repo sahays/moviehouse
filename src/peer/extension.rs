@@ -59,10 +59,7 @@ impl ExtendedHandshake {
         }
 
         if let Some(size) = self.metadata_size {
-            dict.insert(
-                b"metadata_size".to_vec(),
-                BValue::Int(size as i64),
-            );
+            dict.insert(b"metadata_size".to_vec(), BValue::Int(size as i64));
         }
 
         if let Some(reqq) = self.reqq {
@@ -78,12 +75,12 @@ impl ExtendedHandshake {
         let _dict = val.as_dict().ok_or(ExtensionError::InvalidFormat)?;
 
         let mut m = HashMap::new();
-        if let Some(m_val) = val.get_str("m") {
-            if let Some(m_dict) = m_val.as_dict() {
-                for (key, val) in m_dict {
-                    if let (Ok(name), Some(id)) = (std::str::from_utf8(key), val.as_int()) {
-                        m.insert(name.to_string(), id as u8);
-                    }
+        if let Some(m_val) = val.get_str("m")
+            && let Some(m_dict) = m_val.as_dict()
+        {
+            for (key, val) in m_dict {
+                if let (Ok(name), Some(id)) = (std::str::from_utf8(key), val.as_int()) {
+                    m.insert(name.to_string(), id as u8);
                 }
             }
         }
@@ -94,7 +91,10 @@ impl ExtendedHandshake {
             .get_str("metadata_size")
             .and_then(|v| v.as_int())
             .map(|n| n as u64);
-        let reqq = val.get_str("reqq").and_then(|v| v.as_int()).map(|n| n as u64);
+        let reqq = val
+            .get_str("reqq")
+            .and_then(|v| v.as_int())
+            .map(|n| n as u64);
 
         Ok(Self {
             m,
@@ -114,9 +114,17 @@ impl ExtendedHandshake {
 /// BEP9 metadata message types.
 #[derive(Debug, Clone)]
 pub enum MetadataMessage {
-    Request { piece: u32 },
-    Data { piece: u32, total_size: u64, data: Bytes },
-    Reject { piece: u32 },
+    Request {
+        piece: u32,
+    },
+    Data {
+        piece: u32,
+        total_size: u64,
+        data: Bytes,
+    },
+    Reject {
+        piece: u32,
+    },
 }
 
 impl MetadataMessage {
@@ -137,10 +145,7 @@ impl MetadataMessage {
             } => {
                 dict.insert(b"msg_type".to_vec(), BValue::Int(1));
                 dict.insert(b"piece".to_vec(), BValue::Int(*piece as i64));
-                dict.insert(
-                    b"total_size".to_vec(),
-                    BValue::Int(*total_size as i64),
-                );
+                dict.insert(b"total_size".to_vec(), BValue::Int(*total_size as i64));
                 // The data is appended AFTER the bencoded dict (not inside it)
                 let mut encoded = bencode::encode(&BValue::Dict(dict));
                 encoded.extend_from_slice(data);
@@ -159,7 +164,9 @@ impl MetadataMessage {
     pub fn from_bytes(payload: &[u8]) -> Result<Self, ExtensionError> {
         // Use partial decode: find where the bencode dict ends
         let mut decoder = crate::bencode::Decoder::new(payload);
-        let result = decoder.decode().map_err(|e| ExtensionError::Decode(e.to_string()))?;
+        let result = decoder
+            .decode()
+            .map_err(|e| ExtensionError::Decode(e.to_string()))?;
         let consumed = result.end;
 
         let val = result.value;
@@ -178,8 +185,7 @@ impl MetadataMessage {
                 let total_size = val
                     .get_str("total_size")
                     .and_then(|v| v.as_int())
-                    .ok_or(ExtensionError::InvalidFormat)?
-                    as u64;
+                    .ok_or(ExtensionError::InvalidFormat)? as u64;
                 let data = Bytes::copy_from_slice(&payload[consumed..]);
                 Ok(MetadataMessage::Data {
                     piece,
@@ -204,13 +210,11 @@ impl PexMessage {
         let mut added = Vec::new();
         // "added" field is compact IPv4 peers (6 bytes each)
         if let Some(raw) = val.get_str("added").and_then(|v| v.as_bytes()) {
-            added.extend(
-                raw.chunks_exact(6).map(|c| {
-                    let ip = std::net::Ipv4Addr::new(c[0], c[1], c[2], c[3]);
-                    let port = u16::from_be_bytes([c[4], c[5]]);
-                    SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
-                })
-            );
+            added.extend(raw.chunks_exact(6).map(|c| {
+                let ip = std::net::Ipv4Addr::new(c[0], c[1], c[2], c[3]);
+                let port = u16::from_be_bytes([c[4], c[5]]);
+                SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
+            }));
         }
         // "added6" for IPv6 (18 bytes each) -- skip for now
         Ok(Self { added })

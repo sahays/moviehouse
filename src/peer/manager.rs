@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::connection::{run_peer_connection, PeerCommand, PeerEvent};
+use super::connection::{PeerCommand, PeerEvent, run_peer_connection};
 use crate::torrent::types::{InfoHash, PeerId};
 
 /// Maximum concurrent outbound connection attempts.
@@ -145,7 +145,8 @@ impl PeerManager {
     pub fn handle_event(&mut self, addr: SocketAddr, event: &PeerEvent) {
         match event {
             PeerEvent::Connected {
-                supports_extensions, ..
+                supports_extensions,
+                ..
             } => {
                 self.connecting.remove(&addr);
                 if let Some(state) = self.peers.get_mut(&addr) {
@@ -193,7 +194,7 @@ impl PeerManager {
 
     /// Send a command to all connected peers.
     pub fn broadcast(&self, cmd_fn: impl Fn() -> PeerCommand) {
-        for (_, state) in &self.peers {
+        for state in self.peers.values() {
             let _ = state.cmd_tx.try_send(cmd_fn());
         }
     }

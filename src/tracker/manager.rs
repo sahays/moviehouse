@@ -50,7 +50,10 @@ impl TrackerManager {
         let mut reannounce_interval = 1800u32;
 
         for url in &self.tracker_urls {
-            match self.announce_single(url, total_length, Some("started")).await {
+            match self
+                .announce_single(url, total_length, Some("started"))
+                .await
+            {
                 Ok(resp) => {
                     // Prefer min_interval if provided, otherwise use interval
                     let effective = resp.min_interval.unwrap_or(resp.interval);
@@ -114,7 +117,17 @@ impl TrackerManager {
                 Some("stopped") => 3,
                 _ => 0,
             };
-            udp::udp_announce(url, &self.info_hash, &self.peer_id, self.port, 0, 0, left, event_code).await
+            udp::udp_announce(
+                url,
+                &self.info_hash,
+                &self.peer_id,
+                self.port,
+                0,
+                0,
+                left,
+                event_code,
+            )
+            .await
         } else {
             http::http_announce(
                 url,

@@ -61,7 +61,9 @@ impl Metainfo {
         let result = decoder.decode()?;
         let root = result.value;
 
-        let _root_dict = root.as_dict().ok_or(MetainfoError::InvalidFieldType("root"))?;
+        let _root_dict = root
+            .as_dict()
+            .ok_or(MetainfoError::InvalidFieldType("root"))?;
 
         // We need the raw bytes of the info dict for info_hash computation.
         // Re-parse to find the exact byte range of the "info" value.
@@ -72,7 +74,10 @@ impl Metainfo {
             .ok_or(MetainfoError::MissingField("info"))?;
         let info = parse_info(info_val)?;
 
-        let announce = root.get_str("announce").and_then(|v| v.as_str()).map(String::from);
+        let announce = root
+            .get_str("announce")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         let announce_list = root.get_str("announce-list").and_then(|v| {
             v.as_list().map(|tiers| {
@@ -90,8 +95,14 @@ impl Metainfo {
         });
 
         let creation_date = root.get_str("creation date").and_then(|v| v.as_int());
-        let comment = root.get_str("comment").and_then(|v| v.as_str()).map(String::from);
-        let created_by = root.get_str("created by").and_then(|v| v.as_str()).map(String::from);
+        let comment = root
+            .get_str("comment")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let created_by = root
+            .get_str("created by")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         Ok(Metainfo {
             info_hash,
@@ -124,10 +135,10 @@ impl Metainfo {
             }
         }
 
-        if let Some(ref announce) = self.announce {
-            if !urls.contains(announce) {
-                urls.insert(0, announce.clone());
-            }
+        if let Some(ref announce) = self.announce
+            && !urls.contains(announce)
+        {
+            urls.insert(0, announce.clone());
         }
 
         urls
@@ -169,7 +180,7 @@ impl Info {
     /// Number of blocks (16 KiB chunks) in a given piece.
     pub fn blocks_in_piece(&self, piece_index: u32) -> u32 {
         let piece_len = self.piece_length(piece_index);
-        (piece_len + 16383) / 16384
+        piece_len.div_ceil(16384)
     }
 
     /// Length of a specific piece (last piece may be shorter).
@@ -237,7 +248,9 @@ fn compute_info_hash(data: &[u8]) -> Result<InfoHash, MetainfoError> {
 }
 
 fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
-    let _dict = val.as_dict().ok_or(MetainfoError::InvalidFieldType("info"))?;
+    let _dict = val
+        .as_dict()
+        .ok_or(MetainfoError::InvalidFieldType("info"))?;
 
     let piece_length = val
         .get_str("piece length")
@@ -277,21 +290,17 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
 
         let mut entries = Vec::new();
         for f in files_list {
-            let length = f
-                .get_str("length")
-                .and_then(|v| v.as_int())
-                .ok_or(MetainfoError::MissingField("files[].length"))?
-                as u64;
+            let length =
+                f.get_str("length")
+                    .and_then(|v| v.as_int())
+                    .ok_or(MetainfoError::MissingField("files[].length"))? as u64;
 
             let path_list = f
                 .get_str("path")
                 .and_then(|v| v.as_list())
                 .ok_or(MetainfoError::MissingField("files[].path"))?;
 
-            let path: PathBuf = path_list
-                .iter()
-                .filter_map(|p| p.as_str())
-                .collect();
+            let path: PathBuf = path_list.iter().filter_map(|p| p.as_str()).collect();
 
             entries.push(FileEntry { length, path });
         }

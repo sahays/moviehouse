@@ -35,7 +35,7 @@ struct MetadataBuffer {
 
 impl MetadataBuffer {
     fn new(total_size: usize) -> Self {
-        let num_pieces = (total_size + METADATA_PIECE_SIZE - 1) / METADATA_PIECE_SIZE;
+        let num_pieces = total_size.div_ceil(METADATA_PIECE_SIZE);
         Self {
             total_size,
             num_pieces,
@@ -129,10 +129,16 @@ pub async fn download_metadata(
 
     if !magnet.trackers.is_empty() {
         let tm = TrackerManager::new(
-            info_hash, our_peer_id, port,
-            magnet.trackers.clone(), peer_tx.clone(), cancel.clone(),
+            info_hash,
+            our_peer_id,
+            port,
+            magnet.trackers.clone(),
+            peer_tx.clone(),
+            cancel.clone(),
         );
-        tokio::spawn(async move { tm.run(0).await; });
+        tokio::spawn(async move {
+            tm.run(0).await;
+        });
     }
 
     if !no_dht {
@@ -144,7 +150,9 @@ pub async fn download_metadata(
                 loop {
                     let mut rx = dht.get_peers(info_hash).await;
                     while let Some(peers) = rx.recv().await {
-                        if !peers.is_empty() { let _ = tx.send(peers).await; }
+                        if !peers.is_empty() {
+                            let _ = tx.send(peers).await;
+                        }
                     }
                     tokio::select! {
                         _ = c.cancelled() => return,
@@ -247,7 +255,8 @@ pub async fn download_metadata(
         _ => anyhow::bail!("metadata download did not complete"),
     };
 
-    let raw_info = buf.verify(&info_hash)
+    let raw_info = buf
+        .verify(&info_hash)
         .ok_or_else(|| anyhow::anyhow!("metadata hash verification failed"))?;
 
     eprintln!("Metadata verified");
@@ -264,14 +273,21 @@ fn request_metadata_pieces(
     peer_ext: &HashMap<SocketAddr, PeerMeta>,
     peer_manager: &PeerManager,
 ) {
-    let State::Downloading(buf) = state else { return };
-    let Some(meta) = peer_ext.get(addr) else { return };
+    let State::Downloading(buf) = state else {
+        return;
+    };
+    let Some(meta) = peer_ext.get(addr) else {
+        return;
+    };
 
     while let Some(piece) = buf.next_request(*addr) {
-        if !peer_manager.send_command(addr, PeerCommand::SendMetadataRequest {
-            ext_id: meta.ut_metadata_id,
-            piece,
-        }) {
+        if !peer_manager.send_command(
+            addr,
+            PeerCommand::SendMetadataRequest {
+                ext_id: meta.ut_metadata_id,
+                piece,
+            },
+        ) {
             buf.on_reject(piece); // couldn't send, unassign
             break;
         }

@@ -30,7 +30,7 @@ fn max_pipeline(lightspeed: bool, peer_throughput: f64) -> u32 {
     }
     // Start at 64 (baseline), scale up for fast peers. Never below baseline.
     let adaptive = (peer_throughput * 8.0) as u32;
-    adaptive.max(64).min(256)
+    adaptive.clamp(64, 256)
 }
 
 pub struct TorrentSession {
@@ -46,6 +46,7 @@ pub struct TorrentSession {
 }
 
 impl TorrentSession {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         metainfo: Metainfo,
         our_peer_id: PeerId,
@@ -91,8 +92,12 @@ impl TorrentSession {
             create_disk_manager(file_mapping, self.cancel.clone(), self.lightspeed);
         let piece_store = PieceStore::new(info.pieces.clone());
         let mut picker = PiecePicker::new(num_pieces, info.piece_length, info.total_length);
-        let mut peer_manager =
-            PeerManager::new(self.metainfo.info_hash, self.our_peer_id, self.max_peers, self.cancel.clone());
+        let mut peer_manager = PeerManager::new(
+            self.metainfo.info_hash,
+            self.our_peer_id,
+            self.max_peers,
+            self.cancel.clone(),
+        );
 
         let mut peer_bitfields: HashMap<SocketAddr, Bitfield> = HashMap::new();
         // Per-peer outstanding request tracking
@@ -223,7 +228,7 @@ impl TorrentSession {
                     match event {
                         PeerEvent::Connected { supports_extensions, .. } => {
                             let pc = peer_manager.peer_count();
-                            if pc <= 5 || pc % 10 == 0 {
+                            if pc <= 5 || pc.is_multiple_of(10) {
                                 progress.println(format!("Peers: {pc} connected"));
                             }
                             peer_bitfields.insert(addr, Bitfield::new(num_pieces));
@@ -347,7 +352,7 @@ impl TorrentSession {
                             if lightspeed && picker.is_endgame() {
                                 let addrs: Vec<SocketAddr> = peer_manager.connected_peers();
                                 for peer_addr in addrs {
-                                    if peer_manager.peer_state(&peer_addr).map_or(true, |s| s.peer_choking) {
+                                    if peer_manager.peer_state(&peer_addr).is_none_or(|s| s.peer_choking) {
                                         continue;
                                     }
                                     if let Some(bf) = peer_bitfields.get(&peer_addr) {
@@ -408,7 +413,7 @@ impl TorrentSession {
 
                 _ = choke_interval.tick() => {
                     optimistic_counter += 1;
-                    let optimistic = optimistic_counter % 3 == 0;
+                    let optimistic = optimistic_counter.is_multiple_of(3);
                     let commands = choker::run_choking_algorithm(&peer_manager, optimistic);
                     for (addr, cmd) in commands {
                         peer_manager.send_command(&addr, cmd);
@@ -430,7 +435,11 @@ impl TorrentSession {
         let elapsed = start_time.elapsed();
         let done_mb = bytes_new as f64 / (1024.0 * 1024.0);
         let total_mb = self.metainfo.info.total_length as f64 / (1024.0 * 1024.0);
-        let avg_speed = if elapsed.as_secs_f64() > 0.0 { done_mb / elapsed.as_secs_f64() } else { 0.0 };
+        let avg_speed = if elapsed.as_secs_f64() > 0.0 {
+            done_mb / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
         let verified = picker.pieces_done();
 
         let median_speed = if speed_samples.is_empty() {
@@ -439,9 +448,15 @@ impl TorrentSession {
             let mut sorted = speed_samples.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let mid = sorted.len() / 2;
-            if sorted.len() % 2 == 0 { (sorted[mid - 1] + sorted[mid]) / 2.0 } else { sorted[mid] }
+            if sorted.len().is_multiple_of(2) {
+                (sorted[mid - 1] + sorted[mid]) / 2.0
+            } else {
+                sorted[mid]
+            }
         };
-        if min_speed == f64::MAX { min_speed = 0.0; }
+        if min_speed == f64::MAX {
+            min_speed = 0.0;
+        }
 
         eprintln!(
             "Done: {verified}/{num_pieces} pieces ({done_mb:.1}/{total_mb:.1} MiB) in {:.1}s",
@@ -464,24 +479,35 @@ fn fill_pipeline(
     peer_pending: &mut HashMap<SocketAddr, Vec<BlockRequest>>,
     lightspeed: bool,
 ) {
-    let Some(state) = peer_manager.peer_state(addr) else { return };
-    if state.peer_choking { return; }
+    let Some(state) = peer_manager.peer_state(addr) else {
+        return;
+    };
+    if state.peer_choking {
+        return;
+    }
     let outstanding = state.outstanding_requests;
     let depth = max_pipeline(lightspeed, state.throughput_mibps);
-    if outstanding >= depth { return; }
+    if outstanding >= depth {
+        return;
+    }
 
-    let Some(bf) = peer_bitfields.get(addr) else { return };
+    let Some(bf) = peer_bitfields.get(addr) else {
+        return;
+    };
     let to_request = (depth - outstanding) as usize;
 
     for _ in 0..to_request {
         let block = picker.pick_block(bf);
         let Some(block) = block else { break };
 
-        if !peer_manager.send_command(addr, PeerCommand::RequestBlock {
-            index: block.piece_index,
-            begin: block.offset,
-            length: block.length,
-        }) {
+        if !peer_manager.send_command(
+            addr,
+            PeerCommand::RequestBlock {
+                index: block.piece_index,
+                begin: block.offset,
+                length: block.length,
+            },
+        ) {
             // Channel full -- stop sending, try again later
             break;
         }
@@ -503,7 +529,14 @@ fn refill_all_peers(
 ) {
     let addrs: Vec<SocketAddr> = peer_manager.connected_peers();
     for addr in addrs {
-        fill_pipeline(&addr, peer_manager, peer_bitfields, picker, peer_pending, lightspeed);
+        fill_pipeline(
+            &addr,
+            peer_manager,
+            peer_bitfields,
+            picker,
+            peer_pending,
+            lightspeed,
+        );
     }
 }
 

@@ -239,10 +239,7 @@ mod tests {
 
     #[test]
     fn test_decode_bytes() {
-        assert_eq!(
-            decode(b"4:spam").unwrap(),
-            BValue::Bytes(b"spam".to_vec())
-        );
+        assert_eq!(decode(b"4:spam").unwrap(), BValue::Bytes(b"spam".to_vec()));
         assert_eq!(decode(b"0:").unwrap(), BValue::Bytes(vec![]));
     }
 
@@ -251,10 +248,7 @@ mod tests {
         let val = decode(b"l4:spami42ee").unwrap();
         assert_eq!(
             val,
-            BValue::List(vec![
-                BValue::Bytes(b"spam".to_vec()),
-                BValue::Int(42),
-            ])
+            BValue::List(vec![BValue::Bytes(b"spam".to_vec()), BValue::Int(42),])
         );
     }
 

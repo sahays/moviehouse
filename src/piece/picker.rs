@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-
 use super::bitfield::Bitfield;
 use crate::peer::message::BLOCK_SIZE;
 
@@ -38,7 +37,7 @@ struct PieceProgress {
 
 impl PieceProgress {
     fn new(piece_length: u32) -> Self {
-        let num_blocks = (piece_length + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let num_blocks = piece_length.div_ceil(BLOCK_SIZE);
         Self {
             piece_length,
             num_blocks,
@@ -54,7 +53,11 @@ impl PieceProgress {
     fn block_length(&self, block_index: u32) -> u32 {
         if block_index == self.num_blocks - 1 {
             let remainder = self.piece_length % BLOCK_SIZE;
-            if remainder == 0 { BLOCK_SIZE } else { remainder }
+            if remainder == 0 {
+                BLOCK_SIZE
+            } else {
+                remainder
+            }
         } else {
             BLOCK_SIZE
         }
@@ -201,7 +204,9 @@ impl PiecePicker {
     pub fn pick_block(&mut self, peer_bitfield: &Bitfield) -> Option<BlockRequest> {
         // Try to continue an in-progress piece this peer has
         // Sort candidates by active_peers ascending (prefer less-contended pieces)
-        let mut pieces: Vec<(u32, u8)> = self.in_progress.iter()
+        let mut pieces: Vec<(u32, u8)> = self
+            .in_progress
+            .iter()
             .filter(|(idx, _)| peer_bitfield.has(**idx as usize))
             .map(|(idx, p)| (*idx, p.active_peers))
             .collect();
@@ -261,7 +266,7 @@ impl PiecePicker {
                 best_count = 1;
             } else if avail == best_avail {
                 best_count += 1;
-                if rand::random::<u32>() % best_count == 0 {
+                if rand::random::<u32>().is_multiple_of(best_count) {
                     best_idx = Some(i as u32);
                 }
             }
@@ -272,12 +277,7 @@ impl PiecePicker {
 
     /// Record a received block. Returns status for the session to act on.
     /// Does NOT mark the piece as verified -- call `mark_verified()` separately.
-    pub fn block_received(
-        &mut self,
-        piece_index: u32,
-        offset: u32,
-        data: &[u8],
-    ) -> BlockResult {
+    pub fn block_received(&mut self, piece_index: u32, offset: u32, data: &[u8]) -> BlockResult {
         let Some(progress) = self.in_progress.get_mut(&piece_index) else {
             return BlockResult::Duplicate;
         };
@@ -346,7 +346,11 @@ impl PiecePicker {
     fn actual_piece_length(&self, piece_index: u32) -> u32 {
         if piece_index as usize == self.num_pieces - 1 {
             let remainder = (self.total_length % self.piece_length as u64) as u32;
-            if remainder == 0 { self.piece_length } else { remainder }
+            if remainder == 0 {
+                self.piece_length
+            } else {
+                remainder
+            }
         } else {
             self.piece_length
         }
@@ -378,7 +382,9 @@ mod tests {
     fn test_pick_block_basic() {
         let mut picker = PiecePicker::new(4, 32768, 4 * 32768);
         let mut peer_bf = Bitfield::new(4);
-        for i in 0..4 { peer_bf.set(i); }
+        for i in 0..4 {
+            peer_bf.set(i);
+        }
         picker.peer_has_bitfield(&peer_bf);
 
         let block = picker.pick_block(&peer_bf);
@@ -393,7 +399,9 @@ mod tests {
         picker.availability = vec![5, 5, 1, 5];
 
         let mut peer_bf = Bitfield::new(4);
-        for i in 0..4 { peer_bf.set(i); }
+        for i in 0..4 {
+            peer_bf.set(i);
+        }
 
         let block = picker.pick_block(&peer_bf);
         assert!(block.is_some());
@@ -409,11 +417,17 @@ mod tests {
 
         let b1 = picker.pick_block(&peer_bf).unwrap();
         assert_eq!(b1.offset, 0);
-        assert!(matches!(picker.block_received(0, 0, &[1u8; 16384]), BlockResult::Progress { .. }));
+        assert!(matches!(
+            picker.block_received(0, 0, &[1u8; 16384]),
+            BlockResult::Progress { .. }
+        ));
 
         let b2 = picker.pick_block(&peer_bf).unwrap();
         assert_eq!(b2.offset, 16384);
-        assert!(matches!(picker.block_received(0, 16384, &[2u8; 16384]), BlockResult::PieceComplete(_)));
+        assert!(matches!(
+            picker.block_received(0, 16384, &[2u8; 16384]),
+            BlockResult::PieceComplete(_)
+        ));
 
         // Not complete until mark_verified is called
         assert!(!picker.is_complete());
@@ -465,8 +479,14 @@ mod tests {
         picker.peer_has_bitfield(&peer_bf);
 
         picker.pick_block(&peer_bf);
-        assert!(matches!(picker.block_received(0, 0, &[1u8; 16384]), BlockResult::Progress { .. }));
-        assert!(matches!(picker.block_received(0, 0, &[1u8; 16384]), BlockResult::Duplicate));
+        assert!(matches!(
+            picker.block_received(0, 0, &[1u8; 16384]),
+            BlockResult::Progress { .. }
+        ));
+        assert!(matches!(
+            picker.block_received(0, 0, &[1u8; 16384]),
+            BlockResult::Duplicate
+        ));
     }
 
     #[test]

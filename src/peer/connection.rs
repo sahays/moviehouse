@@ -47,28 +47,15 @@ pub enum PeerEvent {
 /// Commands from the session coordinator to a peer connection.
 #[derive(Debug)]
 pub enum PeerCommand {
-    RequestBlock {
-        index: u32,
-        begin: u32,
-        length: u32,
-    },
-    CancelBlock {
-        index: u32,
-        begin: u32,
-        length: u32,
-    },
+    RequestBlock { index: u32, begin: u32, length: u32 },
+    CancelBlock { index: u32, begin: u32, length: u32 },
     SendInterested,
     SendNotInterested,
     SendChoke,
     SendUnchoke,
-    SendHave {
-        piece_index: u32,
-    },
+    SendHave { piece_index: u32 },
     SendExtendedHandshake(ExtendedHandshake),
-    SendMetadataRequest {
-        ext_id: u8,
-        piece: u32,
-    },
+    SendMetadataRequest { ext_id: u8, piece: u32 },
     Disconnect,
 }
 
@@ -84,7 +71,15 @@ pub async fn run_peer_connection(
     mut cmd_rx: mpsc::Receiver<PeerCommand>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let result = run_inner(addr, info_hash, our_peer_id, &event_tx, &mut cmd_rx, &cancel).await;
+    let result = run_inner(
+        addr,
+        info_hash,
+        our_peer_id,
+        &event_tx,
+        &mut cmd_rx,
+        &cancel,
+    )
+    .await;
 
     let reason = match result {
         Ok(()) => "clean disconnect".to_string(),
@@ -191,9 +186,7 @@ async fn run_inner(
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(cmd) => {
-                        if let Err(e) = handle_command(&mut framed, cmd).await {
-                            return Err(e);
-                        }
+                        handle_command(&mut framed, cmd).await?;
                     }
                     None => {
                         // Command channel closed, disconnect
@@ -269,7 +262,11 @@ fn dispatch_extension(id: u8, payload: &[u8]) -> Option<PeerEvent> {
         2 => {
             // ut_pex — our ID 2
             let pex = super::extension::PexMessage::from_bencode(payload).ok()?;
-            if pex.added.is_empty() { None } else { Some(PeerEvent::PexPeers(pex.added)) }
+            if pex.added.is_empty() {
+                None
+            } else {
+                Some(PeerEvent::PexPeers(pex.added))
+            }
         }
         _ => None, // Extension ID we didn't advertise
     }
@@ -308,8 +305,7 @@ async fn handle_command(
             payload: Bytes::from(hs.to_bencode()),
         },
         PeerCommand::SendMetadataRequest { ext_id, piece } => {
-            let msg =
-                super::extension::MetadataMessage::Request { piece };
+            let msg = super::extension::MetadataMessage::Request { piece };
             PeerMessage::Extended {
                 id: ext_id,
                 payload: Bytes::from(msg.to_bytes()),
@@ -318,10 +314,7 @@ async fn handle_command(
         PeerCommand::Disconnect => return Ok(()),
     };
 
-    framed
-        .send(msg)
-        .await
-        .map_err(PeerConnectionError::Codec)?;
+    framed.send(msg).await.map_err(PeerConnectionError::Codec)?;
     Ok(())
 }
 
@@ -335,7 +328,7 @@ fn configure_socket(stream: &TcpStream) {
     let _ = socket.set_recv_buffer_size(2 * 1024 * 1024);
 
     // Increase send buffer to 1 MiB
-    let _ = socket.set_send_buffer_size(1 * 1024 * 1024);
+    let _ = socket.set_send_buffer_size(1024 * 1024);
 }
 
 #[derive(Debug, thiserror::Error)]

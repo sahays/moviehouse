@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 
 use rand::seq::SliceRandom;
 
-use crate::peer::manager::PeerManager;
 use crate::peer::connection::PeerCommand;
+use crate::peer::manager::PeerManager;
 
 /// Number of regular unchoke slots.
 const UNCHOKE_SLOTS: usize = 4;

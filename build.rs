@@ -11,7 +11,10 @@ fn main() {
             let version_str = line
                 .trim_start_matches("version = \"")
                 .trim_end_matches('"');
-            let parts: Vec<u32> = version_str.split('.').filter_map(|s| s.parse().ok()).collect();
+            let parts: Vec<u32> = version_str
+                .split('.')
+                .filter_map(|s| s.parse().ok())
+                .collect();
             if parts.len() == 3 {
                 let new_version = format!("{}.{}.{}", parts[0], parts[1], parts[2] + 1);
                 new_toml.push_str(&format!("version = \"{new_version}\""));

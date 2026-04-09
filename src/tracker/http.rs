@@ -29,6 +29,7 @@ pub struct AnnounceResponse {
 }
 
 /// Announce to an HTTP tracker and return peer addresses.
+#[allow(clippy::too_many_arguments)]
 pub async fn http_announce(
     tracker_url: &str,
     info_hash: &InfoHash,
@@ -76,10 +77,10 @@ pub async fn http_announce(
     })?;
 
     // Check for failure
-    if let Some(failure) = val.get_str("failure reason") {
-        if let Some(reason) = failure.as_str() {
-            return Err(TrackerError::TrackerFailure(reason.to_string()));
-        }
+    if let Some(failure) = val.get_str("failure reason")
+        && let Some(reason) = failure.as_str()
+    {
+        return Err(TrackerError::TrackerFailure(reason.to_string()));
     }
 
     let interval = val
@@ -159,6 +160,6 @@ fn parse_dict_peers(peers: &[bencode::BValue]) -> Vec<SocketAddr> {
 }
 
 fn percent_encode_bytes(bytes: &[u8]) -> String {
-    use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
+    use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
     percent_encode(bytes, NON_ALPHANUMERIC).to_string()
 }
