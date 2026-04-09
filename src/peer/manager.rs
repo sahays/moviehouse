@@ -76,6 +76,9 @@ impl PeerManager {
     /// Add discovered peer addresses to the pending queue.
     pub fn add_peers(&mut self, addrs: impl Iterator<Item = SocketAddr>) {
         for addr in addrs {
+            if self.known_addrs.len() >= 10_000 {
+                break;
+            }
             if !self.known_addrs.contains(&addr) {
                 self.known_addrs.insert(addr);
                 self.pending_peers.push_back(addr);
@@ -219,6 +222,11 @@ impl PeerManager {
         self.peers.get(addr)
     }
 
+    #[cfg(test)]
+    fn known_addrs_len(&self) -> usize {
+        self.known_addrs.len()
+    }
+
     /// Get all peers that are unchoked and we're interested in (can request from).
     pub fn downloadable_peers(&self) -> Vec<SocketAddr> {
         self.peers
@@ -226,5 +234,30 @@ impl PeerManager {
             .filter(|(_, s)| s.am_interested && !s.peer_choking)
             .map(|(a, _)| *a)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::torrent::types::{InfoHash, PeerId};
+
+    #[test]
+    fn test_known_addrs_cap() {
+        let info_hash = InfoHash::from_bytes([0u8; 20]);
+        let peer_id = PeerId([0u8; 20]);
+        let cancel = CancellationToken::new();
+        let mut mgr = PeerManager::new(info_hash, peer_id, 50, cancel);
+
+        // Generate 15000 unique addresses
+        let addrs = (0..15000u32).map(|i| {
+            let port = (i % 65535) as u16 + 1;
+            let b3 = ((i / 65535) % 256) as u8;
+            let b2 = ((i / 65535 / 256) % 256) as u8;
+            SocketAddr::from(([10, b2, b3, 1], port))
+        });
+
+        mgr.add_peers(addrs);
+        assert!(mgr.known_addrs_len() <= 10_000);
     }
 }

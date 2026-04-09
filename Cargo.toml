@@ -1,6 +1,6 @@
 [package]
 name = "torrentclient"
-version = "0.2.64"
+version = "0.2.74"
 edition = "2024"
 
 [dependencies]

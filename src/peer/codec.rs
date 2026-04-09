@@ -53,6 +53,9 @@ impl Encoder<PeerMessage> for PeerCodec {
 
     fn encode(&mut self, msg: PeerMessage, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let len = msg.wire_len();
+        if len > MAX_FRAME_SIZE {
+            return Err(PeerCodecError::FrameTooLarge(len));
+        }
         dst.reserve(4 + len);
 
         // Write length prefix
@@ -73,4 +76,38 @@ pub enum PeerCodecError {
     Message(PeerMessageError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+
+    #[test]
+    fn test_encode_oversized_message() {
+        let mut codec = PeerCodec;
+        let mut buf = BytesMut::new();
+        // Create a piece message larger than MAX_FRAME_SIZE (1 MiB)
+        let big_data = vec![0u8; MAX_FRAME_SIZE + 1];
+        let msg = PeerMessage::Piece {
+            index: 0,
+            begin: 0,
+            data: Bytes::from(big_data),
+        };
+        let result = codec.encode(msg, &mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encode_normal_message() {
+        let mut codec = PeerCodec;
+        let mut buf = BytesMut::new();
+        let msg = PeerMessage::Piece {
+            index: 0,
+            begin: 0,
+            data: Bytes::from(vec![0u8; 16384]),
+        };
+        assert!(codec.encode(msg, &mut buf).is_ok());
+        assert!(!buf.is_empty());
+    }
 }

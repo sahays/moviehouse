@@ -15,6 +15,8 @@ pub enum TrackerError {
     TrackerFailure(String),
     #[error("invalid response")]
     InvalidResponse,
+    #[error("response too large: {0} bytes")]
+    ResponseTooLarge(u64),
     #[error("timeout")]
     Timeout,
 }
@@ -60,9 +62,22 @@ pub async fn http_announce(
     let full_url = format!("{tracker_url}{url}");
     debug!(url = %full_url, "Announcing to tracker");
 
+    const MAX_RESPONSE_SIZE: u64 = 1_048_576; // 1 MiB
+
     let response = client.get(&full_url).send().await?;
     let status = response.status();
+
+    if let Some(content_length) = response.content_length()
+        && content_length > MAX_RESPONSE_SIZE
+    {
+        return Err(TrackerError::ResponseTooLarge(content_length));
+    }
+
     let body = response.bytes().await?;
+
+    if body.len() as u64 > MAX_RESPONSE_SIZE {
+        return Err(TrackerError::ResponseTooLarge(body.len() as u64));
+    }
 
     if !status.is_success() {
         let preview = String::from_utf8_lossy(&body[..body.len().min(200)]);

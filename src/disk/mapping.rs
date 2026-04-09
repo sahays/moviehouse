@@ -62,7 +62,13 @@ impl FileMapping {
     /// Get the file spans that a piece covers.
     /// A single piece can span multiple files in a multi-file torrent.
     pub fn piece_spans(&self, piece_index: u32) -> Vec<FileSpan> {
-        let piece_start = piece_index as u64 * self.piece_length;
+        let piece_start = match (piece_index as u64).checked_mul(self.piece_length) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        if piece_start >= self.total_length {
+            return Vec::new();
+        }
         let piece_end = (piece_start + self.piece_length).min(self.total_length);
         let mut remaining = piece_end - piece_start;
         let mut current_offset = piece_start;
@@ -110,5 +116,33 @@ impl FileMapping {
             .iter()
             .map(|f| (f.path.as_path(), f.length))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::torrent::metainfo::{FileLayout, Info};
+    use crate::torrent::types::Sha1Hash;
+
+    fn make_single_file_info(piece_length: u32, total_length: u64) -> Info {
+        let num_pieces = (total_length as usize).div_ceil(piece_length as usize);
+        Info {
+            piece_length,
+            pieces: vec![Sha1Hash([0u8; 20]); num_pieces],
+            name: "test".to_string(),
+            files: FileLayout::Single {
+                length: total_length,
+            },
+            total_length,
+        }
+    }
+
+    #[test]
+    fn test_piece_spans_overflow() {
+        let info = make_single_file_info(256 * 1024, 1024 * 1024);
+        let mapping = FileMapping::new(&info, Path::new("/tmp"));
+        let spans = mapping.piece_spans(u32::MAX);
+        assert!(spans.is_empty());
     }
 }

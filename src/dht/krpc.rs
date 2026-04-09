@@ -412,13 +412,13 @@ impl KrpcSocket {
 fn encode_compact_nodes(nodes: &[(NodeId, SocketAddr)]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(nodes.len() * 26);
     for (id, addr) in nodes {
-        buf.extend_from_slice(&id.0);
         match addr {
             SocketAddr::V4(v4) => {
+                buf.extend_from_slice(&id.0);
                 buf.extend_from_slice(&v4.ip().octets());
                 buf.extend_from_slice(&v4.port().to_be_bytes());
             }
-            SocketAddr::V6(_) => {} // skip IPv6 in compact format
+            SocketAddr::V6(_) => {} // skip entire entry for IPv6 nodes
         }
     }
     buf
@@ -458,6 +458,73 @@ fn decode_compact_peer(data: &[u8]) -> Option<SocketAddr> {
         Some(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+
+    #[test]
+    fn test_compact_nodes_ipv4_only() {
+        let nodes = vec![
+            (
+                NodeId([1u8; 20]),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6881)),
+            ),
+            (
+                NodeId([2u8; 20]),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 1), 8080)),
+            ),
+            (
+                NodeId([3u8; 20]),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 443)),
+            ),
+        ];
+        let encoded = encode_compact_nodes(&nodes);
+        assert_eq!(encoded.len(), nodes.len() * 26);
+    }
+
+    #[test]
+    fn test_compact_nodes_skips_ipv6() {
+        let nodes = vec![
+            (
+                NodeId([1u8; 20]),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6881)),
+            ),
+            (
+                NodeId([2u8; 20]),
+                SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 6882, 0, 0)),
+            ),
+            (
+                NodeId([3u8; 20]),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 443)),
+            ),
+            (
+                NodeId([4u8; 20]),
+                SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 9999, 0, 0)),
+            ),
+        ];
+        let num_ipv4 = 2;
+        let encoded = encode_compact_nodes(&nodes);
+        assert_eq!(encoded.len(), num_ipv4 * 26);
+    }
+
+    #[test]
+    fn test_compact_nodes_all_ipv6() {
+        let nodes = vec![
+            (
+                NodeId([1u8; 20]),
+                SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 6881, 0, 0)),
+            ),
+            (
+                NodeId([2u8; 20]),
+                SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 6882, 0, 0)),
+            ),
+        ];
+        let encoded = encode_compact_nodes(&nodes);
+        assert!(encoded.is_empty());
     }
 }
 

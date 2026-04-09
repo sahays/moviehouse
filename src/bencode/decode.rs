@@ -23,12 +23,20 @@ pub enum DecodeError {
     UnsortedKeys(usize),
     #[error("duplicate dictionary key at position {0}")]
     DuplicateKey(usize),
+    #[error("nesting too deep at position {0}")]
+    NestingTooDeep(usize),
+    #[error("too many elements at position {0}")]
+    TooManyElements(usize),
 }
 
 /// Bencode decoder that tracks byte positions for raw slice extraction.
+const MAX_DEPTH: usize = 64;
+const MAX_ELEMENTS: usize = 1_000_000;
+
 pub struct Decoder<'a> {
     data: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 /// Result of decoding, including the raw byte range of the decoded value.
@@ -42,7 +50,11 @@ pub struct DecodeResult {
 
 impl<'a> Decoder<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
+        Self {
+            data,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     /// Decode one BValue. Returns the value and the byte range it occupied.
@@ -96,8 +108,19 @@ impl<'a> Decoder<'a> {
     fn decode_value(&mut self) -> Result<BValue, DecodeError> {
         match self.peek()? {
             b'i' => self.decode_int(),
-            b'l' => self.decode_list(),
-            b'd' => self.decode_dict(),
+            b'l' | b'd' => {
+                if self.depth >= MAX_DEPTH {
+                    return Err(DecodeError::NestingTooDeep(self.pos));
+                }
+                self.depth += 1;
+                let result = if self.data[self.pos] == b'l' {
+                    self.decode_list()
+                } else {
+                    self.decode_dict()
+                };
+                self.depth -= 1;
+                result
+            }
             b'0'..=b'9' => self.decode_bytes(),
             b => Err(DecodeError::InvalidByte(b, self.pos)),
         }
@@ -173,6 +196,9 @@ impl<'a> Decoder<'a> {
         let mut items = Vec::new();
 
         while self.peek()? != b'e' {
+            if items.len() >= MAX_ELEMENTS {
+                return Err(DecodeError::TooManyElements(self.pos));
+            }
             items.push(self.decode_value()?);
         }
 
@@ -184,6 +210,9 @@ impl<'a> Decoder<'a> {
         self.expect(b'd')?;
         let mut map = BTreeMap::new();
         while self.peek()? != b'e' {
+            if map.len() >= MAX_ELEMENTS {
+                return Err(DecodeError::TooManyElements(self.pos));
+            }
             let key_start = self.pos;
             let key = match self.decode_value()? {
                 BValue::Bytes(k) => k,
@@ -281,5 +310,46 @@ mod tests {
         let result = decoder.decode().unwrap();
         let dict = result.value.as_dict().unwrap();
         assert!(dict.contains_key(&b"info".to_vec()));
+    }
+
+    #[test]
+    fn test_nesting_depth_limit() {
+        // 100 nested lists -- should fail (limit is 64)
+        let mut deep: Vec<u8> = vec![b'l'; 100];
+        deep.extend(vec![b'e'; 100]);
+        assert!(decode(&deep).is_err());
+
+        // Exactly 64 levels -- should succeed
+        let mut ok: Vec<u8> = vec![b'l'; 64];
+        ok.extend(vec![b'e'; 64]);
+        assert!(decode(&ok).is_ok());
+    }
+
+    #[test]
+    fn test_normal_list_succeeds() {
+        // A list with 100 integers should work fine
+        let mut data = Vec::new();
+        data.push(b'l');
+        for i in 0..100 {
+            data.extend(format!("i{i}e").as_bytes());
+        }
+        data.push(b'e');
+        let val = decode(&data).unwrap();
+        assert_eq!(val.as_list().unwrap().len(), 100);
+    }
+
+    #[test]
+    fn test_normal_dict_succeeds() {
+        // A dict with 100 entries should work fine
+        let mut data = Vec::new();
+        data.push(b'd');
+        for i in 0..100u32 {
+            let key = format!("{i:04}");
+            data.extend(format!("{}:{}", key.len(), key).as_bytes());
+            data.extend(b"i0e");
+        }
+        data.push(b'e');
+        let val = decode(&data).unwrap();
+        assert_eq!(val.as_dict().unwrap().len(), 100);
     }
 }

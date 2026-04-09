@@ -242,7 +242,20 @@ async fn handle_inbound(
                 nodes,
             }
         }
-        KrpcQuery::AnnouncePeer { .. } => KrpcResponse::AnnouncePeer { id: own_id },
+        KrpcQuery::AnnouncePeer { ref token, .. } => {
+            if !token_manager
+                .lock()
+                .await
+                .verify(&query.sender_addr.ip(), token)
+            {
+                debug!(
+                    "Rejecting announce_peer with invalid token from {}",
+                    query.sender_addr
+                );
+                return;
+            }
+            KrpcResponse::AnnouncePeer { id: own_id }
+        }
     };
 
     if let Err(e) = krpc

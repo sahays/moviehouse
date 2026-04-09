@@ -17,6 +17,14 @@ pub enum MetainfoError {
     InvalidPiecesLength(usize),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("invalid piece length: {0}")]
+    InvalidPieceLength(String),
+    #[error("negative file length: {0}")]
+    NegativeFileLength(i64),
+    #[error("path traversal in {0}")]
+    PathTraversal(&'static str),
+    #[error("torrent file too large: {0} bytes")]
+    FileTooLarge(u64),
 }
 
 /// Parsed .torrent metainfo.
@@ -117,6 +125,10 @@ impl Metainfo {
 
     /// Parse from a file path.
     pub fn from_file(path: &std::path::Path) -> Result<Self, MetainfoError> {
+        let meta = std::fs::metadata(path)?;
+        if meta.len() > 10 * 1024 * 1024 {
+            return Err(MetainfoError::FileTooLarge(meta.len()));
+        }
         let data = std::fs::read(path)?;
         Self::from_bytes(&data)
     }
@@ -252,10 +264,16 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         .as_dict()
         .ok_or(MetainfoError::InvalidFieldType("info"))?;
 
-    let piece_length = val
+    let piece_length_raw = val
         .get_str("piece length")
         .and_then(|v| v.as_int())
-        .ok_or(MetainfoError::MissingField("piece length"))? as u32;
+        .ok_or(MetainfoError::MissingField("piece length"))?;
+    if piece_length_raw <= 0 || piece_length_raw > 256 * 1024 * 1024 {
+        return Err(MetainfoError::InvalidPieceLength(format!(
+            "{piece_length_raw} (must be 1..=268435456)"
+        )));
+    }
+    let piece_length = piece_length_raw as u32;
 
     let pieces_raw = val
         .get_str("pieces")
@@ -280,6 +298,9 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         .and_then(|v| v.as_str())
         .ok_or(MetainfoError::MissingField("name"))?
         .to_string();
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(MetainfoError::PathTraversal("name"));
+    }
 
     // Single-file or multi-file?
     let files = if let Some(files_val) = val.get_str("files") {
@@ -290,15 +311,29 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
 
         let mut entries = Vec::new();
         for f in files_list {
-            let length =
-                f.get_str("length")
-                    .and_then(|v| v.as_int())
-                    .ok_or(MetainfoError::MissingField("files[].length"))? as u64;
+            let length_raw = f
+                .get_str("length")
+                .and_then(|v| v.as_int())
+                .ok_or(MetainfoError::MissingField("files[].length"))?;
+            if length_raw < 0 {
+                return Err(MetainfoError::NegativeFileLength(length_raw));
+            }
+            let length = length_raw as u64;
 
             let path_list = f
                 .get_str("path")
                 .and_then(|v| v.as_list())
                 .ok_or(MetainfoError::MissingField("files[].path"))?;
+
+            for component in path_list.iter().filter_map(|p| p.as_str()) {
+                if component.is_empty()
+                    || component == ".."
+                    || component.contains('/')
+                    || component.contains('\\')
+                {
+                    return Err(MetainfoError::PathTraversal("files[].path"));
+                }
+            }
 
             let path: PathBuf = path_list.iter().filter_map(|p| p.as_str()).collect();
 
@@ -307,10 +342,14 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         FileLayout::Multi { files: entries }
     } else {
         // Single-file mode
-        let length = val
+        let length_raw = val
             .get_str("length")
             .and_then(|v| v.as_int())
-            .ok_or(MetainfoError::MissingField("length"))? as u64;
+            .ok_or(MetainfoError::MissingField("length"))?;
+        if length_raw < 0 {
+            return Err(MetainfoError::NegativeFileLength(length_raw));
+        }
+        let length = length_raw as u64;
         FileLayout::Single { length }
     };
 
@@ -326,4 +365,108 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         files,
         total_length,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bencode::encode::encode;
+    use std::collections::BTreeMap;
+
+    /// Build minimal single-file torrent bencode bytes.
+    fn make_single_file_torrent(name: &str, piece_length: i64, length: i64) -> Vec<u8> {
+        let mut info = BTreeMap::new();
+        info.insert(b"name".to_vec(), BValue::Bytes(name.as_bytes().to_vec()));
+        info.insert(b"piece length".to_vec(), BValue::Int(piece_length));
+        info.insert(b"pieces".to_vec(), BValue::Bytes(vec![0u8; 20])); // 1 fake hash
+        info.insert(b"length".to_vec(), BValue::Int(length));
+
+        let mut root = BTreeMap::new();
+        root.insert(b"info".to_vec(), BValue::Dict(info));
+        encode(&BValue::Dict(root))
+    }
+
+    /// Build minimal multi-file torrent bencode bytes.
+    fn make_multi_file_torrent(name: &str, piece_length: i64, files: &[(i64, &[&str])]) -> Vec<u8> {
+        let mut info = BTreeMap::new();
+        info.insert(b"name".to_vec(), BValue::Bytes(name.as_bytes().to_vec()));
+        info.insert(b"piece length".to_vec(), BValue::Int(piece_length));
+        info.insert(b"pieces".to_vec(), BValue::Bytes(vec![0u8; 20]));
+
+        let file_list: Vec<BValue> = files
+            .iter()
+            .map(|(len, path_parts)| {
+                let mut f = BTreeMap::new();
+                f.insert(b"length".to_vec(), BValue::Int(*len));
+                let path = path_parts
+                    .iter()
+                    .map(|p| BValue::Bytes(p.as_bytes().to_vec()))
+                    .collect();
+                f.insert(b"path".to_vec(), BValue::List(path));
+                BValue::Dict(f)
+            })
+            .collect();
+        info.insert(b"files".to_vec(), BValue::List(file_list));
+
+        let mut root = BTreeMap::new();
+        root.insert(b"info".to_vec(), BValue::Dict(info));
+        encode(&BValue::Dict(root))
+    }
+
+    #[test]
+    fn test_valid_single_file_torrent() {
+        let data = make_single_file_torrent("test.txt", 16384, 1000);
+        let meta = Metainfo::from_bytes(&data).unwrap();
+        assert_eq!(meta.info.name, "test.txt");
+        assert_eq!(meta.info.piece_length, 16384);
+        assert_eq!(meta.info.total_length, 1000);
+    }
+
+    #[test]
+    fn test_path_traversal_dotdot() {
+        let data = make_multi_file_torrent("safe", 16384, &[(100, &["..", "etc", "passwd"])]);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_path_traversal_slash_in_component() {
+        let data = make_multi_file_torrent("safe", 16384, &[(100, &["sub/dir", "file.txt"])]);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_path_traversal_name_dotdot() {
+        let data = make_single_file_torrent("../../../etc/passwd", 16384, 100);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_name_with_slash() {
+        let data = make_single_file_torrent("sub/dir", 16384, 100);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_negative_piece_length() {
+        let data = make_single_file_torrent("test.txt", -1, 100);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_zero_piece_length() {
+        let data = make_single_file_torrent("test.txt", 0, 100);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_negative_file_length() {
+        let data = make_multi_file_torrent("safe", 16384, &[(-1, &["file.txt"])]);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_negative_single_file_length() {
+        let data = make_single_file_torrent("test.txt", 16384, -100);
+        assert!(Metainfo::from_bytes(&data).is_err());
+    }
 }

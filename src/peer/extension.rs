@@ -79,14 +79,21 @@ impl ExtendedHandshake {
             && let Some(m_dict) = m_val.as_dict()
         {
             for (key, val) in m_dict {
-                if let (Ok(name), Some(id)) = (std::str::from_utf8(key), val.as_int()) {
+                if let (Ok(name), Some(id)) = (std::str::from_utf8(key), val.as_int())
+                    && id > 0
+                    && id <= 255
+                {
                     m.insert(name.to_string(), id as u8);
                 }
             }
         }
 
         let v = val.get_str("v").and_then(|v| v.as_str()).map(String::from);
-        let p = val.get_str("p").and_then(|v| v.as_int()).map(|n| n as u16);
+        let p = val
+            .get_str("p")
+            .and_then(|v| v.as_int())
+            .filter(|&n| n > 0 && n <= 65535)
+            .map(|n| n as u16);
         let metadata_size = val
             .get_str("metadata_size")
             .and_then(|v| v.as_int())
@@ -218,6 +225,72 @@ impl PexMessage {
         }
         // "added6" for IPv6 (18 bytes each) -- skip for now
         Ok(Self { added })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bencode::encode::encode;
+    use std::collections::BTreeMap;
+
+    fn make_handshake_bytes(m: &[(&str, i64)], port: Option<i64>) -> Vec<u8> {
+        let mut dict = BTreeMap::new();
+        let mut m_dict = BTreeMap::new();
+        for (name, id) in m {
+            m_dict.insert(name.as_bytes().to_vec(), BValue::Int(*id));
+        }
+        dict.insert(b"m".to_vec(), BValue::Dict(m_dict));
+        if let Some(p) = port {
+            dict.insert(b"p".to_vec(), BValue::Int(p));
+        }
+        encode(&BValue::Dict(dict))
+    }
+
+    #[test]
+    fn test_extension_id_valid() {
+        let data = make_handshake_bytes(&[("ut_metadata", 1), ("ut_pex", 2)], None);
+        let hs = ExtendedHandshake::from_bencode(&data).unwrap();
+        assert_eq!(hs.m.get("ut_metadata"), Some(&1u8));
+        assert_eq!(hs.m.get("ut_pex"), Some(&2u8));
+    }
+
+    #[test]
+    fn test_extension_id_out_of_range() {
+        // 256 and -1 should both be rejected
+        let data = make_handshake_bytes(&[("bad_high", 256), ("bad_neg", -1), ("ok", 3)], None);
+        let hs = ExtendedHandshake::from_bencode(&data).unwrap();
+        assert!(!hs.m.contains_key("bad_high"));
+        assert!(!hs.m.contains_key("bad_neg"));
+        assert_eq!(hs.m.get("ok"), Some(&3u8));
+    }
+
+    #[test]
+    fn test_extension_id_zero_rejected() {
+        let data = make_handshake_bytes(&[("zero", 0)], None);
+        let hs = ExtendedHandshake::from_bencode(&data).unwrap();
+        assert!(!hs.m.contains_key("zero"));
+    }
+
+    #[test]
+    fn test_port_valid() {
+        let data = make_handshake_bytes(&[], Some(6881));
+        let hs = ExtendedHandshake::from_bencode(&data).unwrap();
+        assert_eq!(hs.p, Some(6881));
+    }
+
+    #[test]
+    fn test_port_out_of_range() {
+        let data = make_handshake_bytes(&[], Some(70000));
+        let hs = ExtendedHandshake::from_bencode(&data).unwrap();
+        assert_eq!(hs.p, None);
+    }
+
+    #[test]
+    fn test_port_negative() {
+        let data = make_handshake_bytes(&[], Some(-1));
+        let hs = ExtendedHandshake::from_bencode(&data).unwrap();
+        assert_eq!(hs.p, None);
     }
 }
 

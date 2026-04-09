@@ -51,7 +51,13 @@ impl MetadataBuffer {
         if idx >= self.num_pieces || self.received[idx] {
             return false;
         }
+        if data.len() > METADATA_PIECE_SIZE {
+            return false;
+        }
         let offset = idx * METADATA_PIECE_SIZE;
+        if offset >= self.total_size {
+            return false;
+        }
         let end = (offset + data.len()).min(self.total_size);
         self.buffer[offset..end].copy_from_slice(&data[..end - offset]);
         self.received[idx] = true;
@@ -193,7 +199,12 @@ pub async fn download_metadata(
                     }
 
                     PeerEvent::ExtendedHandshake(hs) => {
+                        const MAX_METADATA_SIZE: u64 = 10 * 1024 * 1024; // 10 MiB
                         if let (Some(ext_id), Some(size)) = (hs.extension_id("ut_metadata"), hs.metadata_size) {
+                            if size == 0 || size > MAX_METADATA_SIZE {
+                                eprintln!("Peer reported invalid metadata size: {size}, skipping");
+                                continue;
+                            }
                             peer_ext.insert(addr, PeerMeta { ut_metadata_id: ext_id });
 
                             // Initialize buffer on first size report
@@ -291,5 +302,41 @@ fn request_metadata_pieces(
             buf.on_reject(piece); // couldn't send, unassign
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_buffer_normal() {
+        let mut buf = MetadataBuffer::new(1000);
+        let data = vec![0xAB; 1000];
+        assert!(buf.on_data(0, &data));
+        assert_eq!(buf.buffer, data);
+    }
+
+    #[test]
+    fn test_metadata_buffer_oversized_piece() {
+        let mut buf = MetadataBuffer::new(1000);
+        let data = vec![0u8; METADATA_PIECE_SIZE + 1];
+        assert!(!buf.on_data(0, &data));
+    }
+
+    #[test]
+    fn test_metadata_buffer_out_of_bounds_piece() {
+        let mut buf = MetadataBuffer::new(100);
+        assert_eq!(buf.num_pieces, 1);
+        assert!(!buf.on_data(1, &[0u8; 100]));
+        assert!(!buf.on_data(9999, &[0u8; 10]));
+    }
+
+    #[test]
+    fn test_metadata_buffer_duplicate_piece() {
+        let mut buf = MetadataBuffer::new(METADATA_PIECE_SIZE * 2);
+        let data = vec![0u8; METADATA_PIECE_SIZE];
+        assert!(!buf.on_data(0, &data)); // not complete yet
+        assert!(!buf.on_data(0, &data)); // duplicate, rejected
     }
 }
