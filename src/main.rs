@@ -178,6 +178,7 @@ async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
         store,
         transcode: transcode_handle,
     });
+    let transcode_for_shutdown = state.transcode.clone();
     let router = web::server::create_router(state);
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -201,6 +202,12 @@ async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
     axum::serve(listener, router)
         .with_graceful_shutdown(async move { cancel.cancelled().await })
         .await?;
+
+    // Kill all running ffmpeg processes on shutdown
+    eprintln!("Shutting down — cancelling active transcodes...");
+    transcode_for_shutdown.cancel_all();
+    // Give ffmpeg processes a moment to die
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     Ok(())
 }

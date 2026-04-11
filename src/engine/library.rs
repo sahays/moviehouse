@@ -9,12 +9,20 @@ pub enum MediaType {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TranscodeState {
     Pending,
-    Transcoding { progress_percent: f32 },
-    Ready { output_path: PathBuf },
-    Failed { error: String },
+    Transcoding {
+        progress_percent: f32,
+        #[serde(default)]
+        encoder: String,
+    },
+    Ready {
+        output_path: PathBuf,
+    },
+    Failed {
+        error: String,
+    },
     Skipped,
     Unavailable,
 }
@@ -44,6 +52,13 @@ pub struct MediaEntry {
     pub cast: Vec<String>,
     #[serde(default)]
     pub director: Option<String>,
+    #[serde(default)]
+    pub video_codec: Option<String>,
+    #[serde(default)]
+    pub audio_codec: Option<String>,
+    /// Multiple transcoded versions: preset_name -> file path
+    #[serde(default)]
+    pub versions: std::collections::HashMap<String, PathBuf>,
 }
 
 /// Parse a torrent/file name into a clean title and optional year.

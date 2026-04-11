@@ -3,6 +3,13 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 use super::library::{MediaEntry, TranscodeState};
 use super::session::SessionStatus;
 
@@ -16,6 +23,12 @@ pub struct AppSettings {
     pub default_preset: String,
     pub default_container: String,
     pub tmdb_api_key: String,
+    #[serde(default = "default_true")]
+    pub enable_chunking: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -26,9 +39,10 @@ impl Default for AppSettings {
             download_dir: PathBuf::from("."),
             media_scan_dir: None,
             auto_transcode: true,
-            default_preset: "1080p".into(),
+            default_preset: "compat-1080p".into(),
             default_container: "mp4".into(),
             tmdb_api_key: String::new(),
+            enable_chunking: true,
         }
     }
 }
@@ -181,23 +195,101 @@ impl Store {
         Ok(())
     }
 
-    pub fn update_transcode_state(&self, id: &Uuid, state: TranscodeState) -> anyhow::Result<()> {
+    /// State machine for transcode transitions.
+    /// Valid transitions:
+    ///   Pending      → Transcoding(0%)   [start]
+    ///   Pending      → Unavailable       [no ffmpeg]
+    ///   Transcoding  → Transcoding       [progress update only]
+    ///   Transcoding  → Ready             [complete]
+    ///   Transcoding  → Failed            [error]
+    ///   Ready/Failed → Pending           [re-transcode request]
+    ///   *            → Pending           [recovery on startup]
+    pub fn update_transcode_state(
+        &self,
+        id: &Uuid,
+        new_state: TranscodeState,
+    ) -> anyhow::Result<()> {
         if let Some(mut entry) = self.get_media(id)? {
-            // Set started_at when transitioning to Transcoding
-            if matches!(state, TranscodeState::Transcoding { .. })
-                && entry.transcode_started_at.is_none()
-            {
-                entry.transcode_started_at = Some(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                );
+            let old = &entry.transcode_state;
+
+            match (&old, &new_state) {
+                // Start transcoding: set timestamp
+                (s, TranscodeState::Transcoding { .. })
+                    if !matches!(s, TranscodeState::Transcoding { .. }) =>
+                {
+                    entry.transcode_started_at = Some(now_secs());
+                    entry.transcode_state = new_state;
+                }
+
+                // Progress update: only update percent, preserve timestamp and encoder
+                (
+                    TranscodeState::Transcoding {
+                        encoder: existing_enc,
+                        ..
+                    },
+                    TranscodeState::Transcoding {
+                        progress_percent,
+                        encoder: new_enc,
+                    },
+                ) => {
+                    entry.transcode_state = TranscodeState::Transcoding {
+                        progress_percent: *progress_percent,
+                        encoder: if new_enc.is_empty() {
+                            existing_enc.clone()
+                        } else {
+                            new_enc.clone()
+                        },
+                    };
+                }
+
+                // Complete: store output path
+                (TranscodeState::Transcoding { .. }, TranscodeState::Ready { output_path }) => {
+                    entry.transcoded_path = Some(output_path.clone());
+                    entry.transcode_state = new_state;
+                }
+
+                // Failure
+                (TranscodeState::Transcoding { .. }, TranscodeState::Failed { .. }) => {
+                    entry.transcode_state = new_state;
+                }
+
+                // No ffmpeg
+                (TranscodeState::Pending, TranscodeState::Unavailable) => {
+                    entry.transcode_state = new_state;
+                }
+
+                // Re-transcode or recovery: reset to Pending
+                (_, TranscodeState::Pending) => {
+                    entry.transcode_started_at = None;
+                    entry.transcode_state = new_state;
+                }
+
+                // Invalid transition: log and ignore
+                _ => {
+                    eprintln!(
+                        "Invalid transcode state transition: {:?} → {:?} (ignored)",
+                        old, new_state
+                    );
+                    return Ok(());
+                }
             }
-            entry.transcode_state = state;
-            if let TranscodeState::Ready { ref output_path } = entry.transcode_state {
-                entry.transcoded_path = Some(output_path.clone());
-            }
+
+            self.put_media(&entry)?;
+        }
+        Ok(())
+    }
+
+    /// Store a completed transcode version.
+    pub fn add_version(
+        &self,
+        id: &Uuid,
+        preset_name: &str,
+        output_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        if let Some(mut entry) = self.get_media(id)? {
+            entry
+                .versions
+                .insert(preset_name.to_string(), output_path.to_path_buf());
             self.put_media(&entry)?;
         }
         Ok(())

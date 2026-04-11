@@ -4,51 +4,71 @@ use serde::{Deserialize, Serialize};
 pub struct TranscodePreset {
     pub name: String,
     pub label: String,
+    pub description: String,
     pub scale_filter: Option<String>,
     pub crf: u8,
-    pub video_bitrate: Option<String>,
     pub audio_bitrate: String,
 }
 
-/// Built-in presets with CRF values tuned for H.265 (libx265).
-/// H.265 CRF ~28 ≈ H.264 CRF ~23 at similar quality.
+/// Two modes: compatibility (H.264, universal) and quality (remux, instant).
+/// Each mode has resolution options.
 pub fn builtin_presets() -> Vec<TranscodePreset> {
     vec![
+        // Best Compatibility — H.264 re-encode, works on all browsers
         TranscodePreset {
-            name: "4k".into(),
-            label: "4K (2160p) — Original resolution".into(),
+            name: "compat-4k".into(),
+            label: "4K".into(),
+            description: "H.264, plays everywhere".into(),
             scale_filter: None,
-            crf: 24,
-            video_bitrate: Some("15M".into()),
+            crf: 20,
             audio_bitrate: "256k".into(),
         },
         TranscodePreset {
-            name: "1080p".into(),
-            label: "1080p (Full HD)".into(),
+            name: "compat-1080p".into(),
+            label: "1080p".into(),
+            description: "H.264, plays everywhere".into(),
             scale_filter: Some("-2:1080".into()),
-            crf: 28,
-            video_bitrate: Some("5M".into()),
+            crf: 23,
             audio_bitrate: "192k".into(),
         },
         TranscodePreset {
-            name: "720p".into(),
-            label: "720p (HD)".into(),
+            name: "compat-720p".into(),
+            label: "720p".into(),
+            description: "H.264, plays everywhere".into(),
             scale_filter: Some("-2:720".into()),
-            crf: 30,
-            video_bitrate: Some("2.5M".into()),
+            crf: 25,
             audio_bitrate: "128k".into(),
         },
         TranscodePreset {
-            name: "480p".into(),
-            label: "480p (SD)".into(),
+            name: "compat-480p".into(),
+            label: "480p".into(),
+            description: "H.264, plays everywhere".into(),
             scale_filter: Some("-2:480".into()),
-            crf: 32,
-            video_bitrate: Some("1M".into()),
+            crf: 28,
             audio_bitrate: "96k".into(),
+        },
+        // Best Quality — remux (copy streams), instant, Apple/Safari only for HEVC
+        TranscodePreset {
+            name: "quality-original".into(),
+            label: "Original".into(),
+            description: "No re-encoding, instant".into(),
+            scale_filter: None,
+            crf: 0, // not used for remux
+            audio_bitrate: "192k".into(),
         },
     ]
 }
 
 pub fn get_preset(name: &str) -> Option<TranscodePreset> {
     builtin_presets().into_iter().find(|p| p.name == name)
+}
+
+/// Check if a preset is a "quality" (remux) preset.
+pub fn is_quality_preset(name: &str) -> bool {
+    name.starts_with("quality-")
+}
+
+/// Check if a preset is a "compatibility" (re-encode) preset.
+pub fn is_compat_preset(name: &str) -> bool {
+    name.starts_with("compat-")
 }

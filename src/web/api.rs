@@ -233,12 +233,69 @@ pub async fn stream_media(
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    // Determine which file to serve
-    let file_path = match &entry.transcode_state {
-        crate::engine::library::TranscodeState::Ready { output_path } => output_path.clone(),
-        crate::engine::library::TranscodeState::Skipped => entry.media_file.clone(),
-        _ => return StatusCode::NOT_FOUND.into_response(),
+    // Pick the best available version to play:
+    // 1. Best Compatibility (compat-*) — H.264, plays everywhere
+    // 2. Best Quality (quality-*) — remuxed, may be HEVC (Safari only)
+    // 3. transcoded_path fallback
+    // 4. Original file if Skipped
+    let file_path = {
+        // Prefer compat version (plays everywhere)
+        let compat = entry
+            .versions
+            .iter()
+            .find(|(k, _)| k.starts_with("compat-"))
+            .map(|(_, v)| v.clone());
+        // Then quality version
+        let quality = entry
+            .versions
+            .iter()
+            .find(|(k, _)| k.starts_with("quality-"))
+            .map(|(_, v)| v.clone());
+        // Pick best available
+        if let Some(path) = compat {
+            path
+        } else if let Some(path) = quality {
+            path
+        } else if let crate::engine::library::TranscodeState::Ready { output_path } =
+            &entry.transcode_state
+        {
+            output_path.clone()
+        } else if entry.transcode_state == crate::engine::library::TranscodeState::Skipped {
+            entry.media_file.clone()
+        } else {
+            return StatusCode::NOT_FOUND.into_response();
+        }
     };
+
+    // For HLS: rewrite .m3u8 segment URLs to point at our segment API
+    let is_hls = file_path.extension().and_then(|e| e.to_str()) == Some("m3u8");
+    if is_hls {
+        let content = match tokio::fs::read_to_string(&file_path).await {
+            Ok(c) => c,
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        };
+        // Rewrite segment filenames to API URLs
+        let rewritten: String = content
+            .lines()
+            .map(|line| {
+                if !line.starts_with('#') && !line.is_empty() {
+                    format!("/api/v1/media/{id}/segment/{line}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return (
+            StatusCode::OK,
+            [(
+                header::CONTENT_TYPE,
+                "application/vnd.apple.mpegurl".to_string(),
+            )],
+            rewritten,
+        )
+            .into_response();
+    }
 
     let file = match tokio::fs::File::open(&file_path).await {
         Ok(f) => f,
@@ -317,6 +374,54 @@ pub async fn stream_media(
         .into_response()
 }
 
+/// Serve HLS .ts segment files for a media entry.
+pub async fn stream_segment(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(Uuid, String)>,
+) -> impl IntoResponse {
+    let entry = match state.store.get_media(&id) {
+        Ok(Some(e)) => e,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let base_dir = match &entry.transcode_state {
+        crate::engine::library::TranscodeState::Ready { output_path } => output_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf(),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    // Security: prevent path traversal
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let segment_path = base_dir.join(&filename);
+    let file = match tokio::fs::File::open(&segment_path).await {
+        Ok(f) => f,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let content_type = if filename.ends_with(".ts") {
+        "video/mp2t"
+    } else if filename.ends_with(".m3u8") {
+        "application/vnd.apple.mpegurl"
+    } else {
+        "application/octet-stream"
+    };
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, content_type.to_string())],
+        body,
+    )
+        .into_response()
+}
+
 // ── Settings ──
 
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -371,6 +476,19 @@ pub async fn manual_transcode(
         }
     };
 
+    if matches!(
+        entry.transcode_state,
+        crate::engine::library::TranscodeState::Transcoding { .. }
+    ) {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "already transcoding".into(),
+            }),
+        )
+            .into_response();
+    }
+
     let output_dir = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".movies")
@@ -383,12 +501,14 @@ pub async fn manual_transcode(
     };
     let output_path = output_dir.join(format!("{sanitized}.{ext}"));
 
+    let settings = state.store.get_settings();
     let job = crate::transcode::runner::TranscodeJob {
         media_id: id,
         input_path: entry.media_file,
         output_path,
         preset_name: req.preset,
         container: req.container,
+        enable_chunking: settings.enable_chunking,
     };
 
     let _ = state
@@ -405,6 +525,22 @@ pub async fn manual_transcode(
         Json(serde_json::json!({ "status": "queued" })),
     )
         .into_response()
+}
+
+// ── Cancel Transcode ──
+
+pub async fn cancel_transcode(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    state.transcode.cancel(&id);
+    let _ = state.store.update_transcode_state(
+        &id,
+        crate::engine::library::TranscodeState::Failed {
+            error: "Cancelled".into(),
+        },
+    );
+    StatusCode::OK
 }
 
 // ── Filesystem Browse ──
@@ -633,6 +769,9 @@ pub async fn scan_folder(
             rating: None,
             cast: Vec::new(),
             director: None,
+            video_codec: None,
+            audio_codec: None,
+            versions: std::collections::HashMap::new(),
         };
 
         let _ = state.store.put_media(&entry);
@@ -696,6 +835,7 @@ pub async fn scan_folder(
                     output_path,
                     preset_name: settings.default_preset.clone(),
                     container: settings.default_container.clone(),
+                    enable_chunking: settings.enable_chunking,
                 };
                 let tc = state.transcode.clone();
                 tokio::spawn(async move {

@@ -49,6 +49,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             axum::routing::get(super::api::stream_media),
         )
         .route(
+            "/api/v1/media/{id}/segment/{filename}",
+            axum::routing::get(super::api::stream_segment),
+        )
+        .route(
             "/api/v1/system/status",
             axum::routing::get(super::api::system_status),
         )
@@ -63,6 +67,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/library/{id}/transcode",
             axum::routing::post(super::api::manual_transcode),
+        )
+        .route(
+            "/api/v1/library/{id}/cancel-transcode",
+            axum::routing::post(super::api::cancel_transcode),
         )
         .route(
             "/api/v1/library/scan",

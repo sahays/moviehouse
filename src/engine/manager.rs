@@ -188,6 +188,9 @@ impl SessionManager {
                             rating: None,
                             cast: Vec::new(),
                             director: None,
+                            video_codec: None,
+                            audio_codec: None,
+                            versions: std::collections::HashMap::new(),
                         };
 
                         let _ = store.put_media(&entry);
@@ -254,6 +257,7 @@ impl SessionManager {
                                 output_path,
                                 preset_name: settings.default_preset.clone(),
                                 container: settings.default_container.clone(),
+                                enable_chunking: settings.enable_chunking,
                             };
                             let tc = tc.clone();
                             tokio::spawn(async move {

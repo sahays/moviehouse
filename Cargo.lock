@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "moviehouse"
-version = "0.11.64"
+version = "1.11.129"
 dependencies = [
  "anyhow",
  "axum",
@@ -1874,6 +1874,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
