@@ -1,3 +1,8 @@
+// Build script: build frontend and bump version.
+// Allow expect/unwrap here since build scripts should abort on failure.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -42,7 +47,7 @@ fn main() {
                 .collect();
             if parts.len() == 3 {
                 let new_version = format!("{}.{}.{}", parts[0], parts[1], parts[2] + 1);
-                new_toml.push_str(&format!("version = \"{new_version}\""));
+                let _ = write!(new_toml, "version = \"{new_version}\"");
                 bumped = true;
             } else {
                 new_toml.push_str(line);

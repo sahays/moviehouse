@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use sha1::{Digest, Sha1};
 
-/// Token manager for DHT announce_peer verification.
+/// Token manager for DHT `announce_peer` verification.
 /// Generates tokens bound to an IP address; verifies against current and previous secret.
 pub struct TokenManager {
     current_secret: [u8; 16],
@@ -58,6 +58,7 @@ impl TokenManager {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn generate_with_secret(&self, addr: &IpAddr, secret: &[u8; 16]) -> Vec<u8> {
         let mut hasher = Sha1::new();
         match addr {

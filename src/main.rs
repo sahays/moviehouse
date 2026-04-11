@@ -160,7 +160,7 @@ async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
     {
         let mut settings = store.get_settings();
         if settings.tmdb_api_key.is_empty() && !config.tmdb_api_key.is_empty() {
-            settings.tmdb_api_key = config.tmdb_api_key.clone();
+            settings.tmdb_api_key.clone_from(&config.tmdb_api_key);
             let _ = store.put_settings(&settings);
         }
     }
@@ -179,7 +179,7 @@ async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
         transcode: transcode_handle,
     });
     let transcode_for_shutdown = state.transcode.clone();
-    let router = web::server::create_router(state);
+    let router = web::server::create_router(&state);
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     eprintln!("Web UI running at http://{bind}");

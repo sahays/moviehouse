@@ -9,10 +9,17 @@ interface VideoPlayerProps {
 
 export function VideoPlayer({ mediaId, title, onClose }: VideoPlayerProps) {
   return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal overlay dismiss
     <div
+      role="dialog"
+      aria-label={`Playing ${title}`}
       className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4"
       onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
     >
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-medium text-white">{title}</h2>
@@ -21,6 +28,7 @@ export function VideoPlayer({ mediaId, title, onClose }: VideoPlayerProps) {
             Close
           </Button>
         </div>
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption -- captions not available for torrented media */}
         <video
           controls
           autoPlay

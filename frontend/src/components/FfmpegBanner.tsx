@@ -12,7 +12,9 @@ export function FfmpegBanner() {
   useEffect(() => {
     fetch("/api/v1/system/status")
       .then((r) => r.json())
-      .then(setStatus)
+      .then((data: unknown) => {
+        if (data && typeof data === "object") setStatus(data as SystemStatus);
+      })
       .catch(() => {});
   }, []);
 

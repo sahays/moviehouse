@@ -68,7 +68,7 @@ export function AddTorrent({ onAdded }: AddTorrentProps) {
           throw new Error(text || res.statusText);
         }
         setMagnetUri("");
-        setStatus({ type: "success", text: "Magnet link added" });
+        setStatus({ type: "success", text: "Resolving magnet link..." });
       } catch (err) {
         setStatus({
           type: "error",
@@ -121,6 +121,8 @@ export function AddTorrent({ onAdded }: AddTorrentProps) {
       </h2>
 
       <div
+        role="button"
+        tabIndex={0}
         className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
           isDragging
             ? "border-blue-500 bg-blue-500/10"
@@ -130,6 +132,12 @@ export function AddTorrent({ onAdded }: AddTorrentProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
       >
         <input
           ref={fileInputRef}

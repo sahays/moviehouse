@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -11,22 +10,9 @@ use crate::torrent::metainfo::Metainfo;
 use crate::torrent::types::PeerId;
 use crate::transcode::runner::TranscodeHandle;
 
-use super::session::{SessionHandle, SessionState, SessionStatus, TorrentSession};
+use super::session::{SessionState, SessionStatus, TorrentSession};
 use super::store::{DownloadRecord, Store};
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionEvent {
-    pub id: Uuid,
-    pub status: SessionStatus,
-}
-
-pub struct DownloadOptions {
-    pub port: u16,
-    pub max_peers: usize,
-    pub output_dir: std::path::PathBuf,
-    pub no_dht: bool,
-    pub lightspeed: bool,
-}
+pub use super::types::{DownloadOptions, SessionEvent, SessionHandle};
 
 pub struct SessionManager {
     sessions: Arc<DashMap<Uuid, SessionHandle>>,
@@ -52,6 +38,9 @@ impl SessionManager {
         }
     }
 
+    // Async for API consistency; spawned tasks use async internally
+    // unwrap_used: RwLock unwrap is correct — poisoned lock means a thread panicked
+    #[allow(clippy::unused_async, clippy::too_many_lines, clippy::unwrap_used)]
     pub async fn add_torrent(
         &self,
         metainfo: Metainfo,
@@ -216,7 +205,7 @@ impl SessionManager {
                                 && let Ok(Some(mut entry)) = store_for_tmdb.get_media(&entry_id)
                             {
                                 if let Some(ref title) = meta.title {
-                                    entry.title = title.clone();
+                                    title.clone_into(&mut entry.title);
                                 }
                                 entry.poster_url = meta.poster_url;
                                 entry.overview = meta.overview;
@@ -273,6 +262,7 @@ impl SessionManager {
     }
 
     /// List active sessions (in-memory) merged with persisted history.
+    #[allow(clippy::unwrap_used)] // RwLock unwrap is correct for unpoisoned locks
     pub fn list(&self) -> Vec<SessionStatus> {
         // Active sessions take priority
         let mut statuses: Vec<SessionStatus> = self
@@ -294,6 +284,7 @@ impl SessionManager {
         statuses
     }
 
+    #[allow(clippy::unwrap_used)] // RwLock unwrap is correct for unpoisoned locks
     pub fn get(&self, id: &Uuid) -> Option<SessionStatus> {
         // Check active sessions first
         if let Some(h) = self.sessions.get(id) {

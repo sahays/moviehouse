@@ -10,7 +10,7 @@ const MAX_FRAME_SIZE: usize = 1 << 20; // 1 MiB
 /// Length-prefixed message codec for the peer wire protocol.
 ///
 /// Wire format: <4-byte big-endian length><payload>
-/// KeepAlive: length=0, no payload.
+/// `KeepAlive`: length=0, no payload.
 pub struct PeerCodec;
 
 impl Decoder for PeerCodec {
@@ -79,6 +79,7 @@ pub enum PeerCodecError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use bytes::Bytes;

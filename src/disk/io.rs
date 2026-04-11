@@ -109,7 +109,7 @@ impl DiskManager {
     pub async fn run(mut self) {
         loop {
             tokio::select! {
-                _ = self.cancel.cancelled() => {
+                () = self.cancel.cancelled() => {
                     debug!("Disk manager received cancel, draining remaining writes...");
                     // Drain any remaining commands in the channel before exiting
                     self.drain_remaining().await;

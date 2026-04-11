@@ -1,65 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MediaType {
-    Movie,
-    Show,
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TranscodeState {
-    Pending,
-    Transcoding {
-        progress_percent: f32,
-        #[serde(default)]
-        encoder: String,
-    },
-    Ready {
-        output_path: PathBuf,
-    },
-    Failed {
-        error: String,
-    },
-    Skipped,
-    Unavailable,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaEntry {
-    pub id: Uuid,
-    pub title: String,
-    pub year: Option<u16>,
-    pub media_type: MediaType,
-    pub original_path: PathBuf,
-    pub media_file: PathBuf,
-    pub transcoded_path: Option<PathBuf>,
-    pub transcode_state: TranscodeState,
-    #[serde(default)]
-    pub transcode_started_at: Option<u64>,
-    pub download_id: Uuid,
-    pub added_at: u64,
-    pub file_size: u64,
-    #[serde(default)]
-    pub poster_url: Option<String>,
-    #[serde(default)]
-    pub overview: Option<String>,
-    #[serde(default)]
-    pub rating: Option<f32>,
-    #[serde(default)]
-    pub cast: Vec<String>,
-    #[serde(default)]
-    pub director: Option<String>,
-    #[serde(default)]
-    pub video_codec: Option<String>,
-    #[serde(default)]
-    pub audio_codec: Option<String>,
-    /// Multiple transcoded versions: preset_name -> file path
-    #[serde(default)]
-    pub versions: std::collections::HashMap<String, PathBuf>,
-}
+pub use super::types::{MediaEntry, MediaType, TranscodeState};
 
 /// Parse a torrent/file name into a clean title and optional year.
 /// E.g., "The.Matrix.1999.1080p.BluRay.x264-Group" -> ("The Matrix", Some(1999))
@@ -179,13 +120,14 @@ pub fn is_web_compatible(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
+            .map(str::to_lowercase)
             .as_deref(),
-        Some("mp4") | Some("m4v") | Some("webm")
+        Some("mp4" | "m4v" | "webm")
     )
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

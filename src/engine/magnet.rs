@@ -113,6 +113,7 @@ struct PeerMeta {
 
 // --- Orchestrator ---
 
+#[allow(clippy::too_many_lines)]
 pub async fn download_metadata(
     magnet: &MagnetLink,
     our_peer_id: PeerId,
@@ -148,7 +149,7 @@ pub async fn download_metadata(
     }
 
     if !no_dht {
-        let dht_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let dht_addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], 0));
         if let Ok(dht) = DhtHandle::start(dht_addr, cancel.clone(), lightspeed).await {
             let tx = peer_tx.clone();
             let c = cancel.clone();
@@ -161,8 +162,8 @@ pub async fn download_metadata(
                         }
                     }
                     tokio::select! {
-                        _ = c.cancelled() => return,
-                        _ = tokio::time::sleep(Duration::from_secs(15)) => {}
+                        () = c.cancelled() => return,
+                        () = tokio::time::sleep(Duration::from_secs(15)) => {}
                     }
                 }
             });
@@ -177,7 +178,7 @@ pub async fn download_metadata(
     // Event loop: discover peers, download metadata
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => anyhow::bail!("cancelled"),
+            () = cancel.cancelled() => anyhow::bail!("cancelled"),
 
             Some(new_peers) = peer_rx.recv() => {
                 peer_manager.add_peers(new_peers.into_iter());
@@ -261,9 +262,8 @@ pub async fn download_metadata(
     let warm_peers = peer_manager.connected_peers();
 
     // Verify metadata
-    let buf = match state {
-        State::Downloading(buf) => buf,
-        _ => anyhow::bail!("metadata download did not complete"),
+    let State::Downloading(buf) = state else {
+        anyhow::bail!("metadata download did not complete");
     };
 
     let raw_info = buf
@@ -306,6 +306,7 @@ fn request_metadata_pieces(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

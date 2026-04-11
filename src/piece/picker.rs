@@ -213,7 +213,10 @@ impl PiecePicker {
         pieces.sort_by_key(|&(_, active)| active);
 
         for (piece_idx, _) in pieces {
-            let progress = self.in_progress.get_mut(&piece_idx).unwrap();
+            // Piece is guaranteed to be in_progress since we got it from the in_progress keys
+            let Some(progress) = self.in_progress.get_mut(&piece_idx) else {
+                continue;
+            };
             if let Some(block_idx) = progress.assign_next_block() {
                 progress.active_peers = progress.active_peers.saturating_add(1);
                 let length = progress.block_length(block_idx);
@@ -295,7 +298,10 @@ impl PiecePicker {
         }
 
         if progress.is_complete() {
-            let complete = self.in_progress.remove(&piece_index).unwrap();
+            // Piece is guaranteed to exist since we just accessed it above
+            let Some(complete) = self.in_progress.remove(&piece_index) else {
+                return BlockResult::Duplicate;
+            };
             // Do NOT set self.have here -- wait for verification
             BlockResult::PieceComplete(complete.data)
         } else {
@@ -386,6 +392,7 @@ impl PiecePicker {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

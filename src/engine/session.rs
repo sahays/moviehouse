@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use indicatif::{ProgressBar, ProgressStyle};
-use serde::Serialize;
 use std::sync::RwLock;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -26,40 +25,7 @@ use crate::torrent::types::PeerId;
 use crate::tracker::manager::TrackerManager;
 
 use super::choker;
-
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
-pub enum SessionState {
-    Downloading,
-    Completed,
-    Error(String),
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
-pub struct SessionStatus {
-    pub id: Uuid,
-    pub name: String,
-    pub info_hash: String,
-    pub state: SessionState,
-    pub total_bytes: u64,
-    pub downloaded_bytes: u64,
-    pub pieces_done: usize,
-    pub pieces_total: usize,
-    pub peer_count: usize,
-    pub download_speed: f64,
-    pub progress: f64,
-    pub started_at: u64,
-    pub completed_at: Option<u64>,
-    pub uploaded_bytes: u64,
-}
-
-pub struct SessionHandle {
-    pub id: Uuid,
-    pub name: String,
-    pub status: Arc<RwLock<SessionStatus>>,
-    pub status_rx: watch::Receiver<SessionStatus>,
-    pub cancel: CancellationToken,
-}
+pub use super::types::{SessionHandle, SessionState, SessionStatus};
 
 fn max_pipeline(lightspeed: bool, peer_throughput: f64) -> u32 {
     if !lightspeed {
@@ -146,6 +112,8 @@ impl TorrentSession {
         }
     }
 
+    // Core download event loop — splitting would hurt readability
+    #[allow(clippy::too_many_lines, clippy::unwrap_used)]
     pub async fn run(self) -> anyhow::Result<()> {
         let info = &self.metainfo.info;
         let num_pieces = info.pieces.len();
@@ -210,7 +178,7 @@ impl TorrentSession {
         });
 
         if !self.no_dht {
-            let dht_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+            let dht_addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], 0));
             match DhtHandle::start(dht_addr, self.cancel.clone(), self.lightspeed).await {
                 Ok(dht_handle) => {
                     let info_hash = self.metainfo.info_hash;
@@ -221,7 +189,7 @@ impl TorrentSession {
                             let mut rx = dht_handle.get_peers(info_hash).await;
                             loop {
                                 tokio::select! {
-                                    _ = cancel.cancelled() => return,
+                                    () = cancel.cancelled() => return,
                                     result = rx.recv() => {
                                         match result {
                                             Some(peers) if !peers.is_empty() => {
@@ -234,8 +202,8 @@ impl TorrentSession {
                                 }
                             }
                             tokio::select! {
-                                _ = cancel.cancelled() => return,
-                                _ = tokio::time::sleep(Duration::from_secs(15)) => {}
+                                () = cancel.cancelled() => return,
+                                () = tokio::time::sleep(Duration::from_secs(15)) => {}
                             }
                         }
                     });
@@ -289,7 +257,7 @@ impl TorrentSession {
             }
 
             tokio::select! {
-                _ = self.cancel.cancelled() => break,
+                () = self.cancel.cancelled() => break,
 
                 Some(new_peers) = peer_rx.recv() => {
                     let count = new_peers.len();
@@ -621,12 +589,12 @@ impl TorrentSession {
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mid = sorted.len() / 2;
             if sorted.len().is_multiple_of(2) {
-                (sorted[mid - 1] + sorted[mid]) / 2.0
+                f64::midpoint(sorted[mid - 1], sorted[mid])
             } else {
                 sorted[mid]
             }
         };
-        if min_speed == f64::MAX {
+        if (min_speed - f64::MAX).abs() < f64::EPSILON {
             min_speed = 0.0;
         }
 
@@ -642,7 +610,7 @@ impl TorrentSession {
     }
 }
 
-/// Fill a peer's request pipeline up to max_pipeline outstanding requests.
+/// Fill a peer's request pipeline up to `max_pipeline` outstanding requests.
 fn fill_pipeline(
     addr: &SocketAddr,
     peer_manager: &mut PeerManager,

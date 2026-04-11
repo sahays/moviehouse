@@ -161,7 +161,7 @@ async fn run_inner(
 
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => {
+            () = cancel.cancelled() => {
                 debug!(peer = %addr, "Peer connection cancelled");
                 break;
             }
@@ -214,20 +214,23 @@ async fn handle_incoming_message(
     supports_extensions: bool,
 ) -> Result<(), PeerConnectionError> {
     let event = match msg {
-        PeerMessage::KeepAlive => return Ok(()),
+        PeerMessage::KeepAlive
+        | PeerMessage::Interested
+        | PeerMessage::NotInterested
+        | PeerMessage::HaveNone
+        | PeerMessage::Unknown(_)
+        | PeerMessage::Request { .. }
+        | PeerMessage::Cancel { .. } => return Ok(()),
         PeerMessage::Choke => PeerEvent::Choked,
         PeerMessage::Unchoke => PeerEvent::Unchoked,
-        PeerMessage::Interested | PeerMessage::NotInterested => return Ok(()),
         PeerMessage::Have { piece_index } => PeerEvent::Have { piece_index },
         PeerMessage::Bitfield(bf) => PeerEvent::BitfieldReceived(bf),
         PeerMessage::HaveAll => PeerEvent::HaveAll,
-        PeerMessage::HaveNone | PeerMessage::Unknown(_) => return Ok(()),
         PeerMessage::Piece { index, begin, data } => PeerEvent::BlockReceived {
             piece_index: index,
             offset: begin,
             data,
         },
-        PeerMessage::Request { .. } | PeerMessage::Cancel { .. } => return Ok(()),
         PeerMessage::Extended { id, payload } => {
             if !supports_extensions {
                 return Ok(());
@@ -246,7 +249,7 @@ async fn handle_incoming_message(
 /// Dispatch an extension message.
 ///
 /// BEP10: peers send messages using OUR extension IDs (which we advertised
-/// in our handshake). We always advertise ut_metadata=1, ut_pex=2.
+/// in our handshake). We always advertise `ut_metadata=1`, `ut_pex=2`.
 /// ID 0 is always the extended handshake itself.
 fn dispatch_extension(id: u8, payload: &[u8]) -> Option<PeerEvent> {
     match id {

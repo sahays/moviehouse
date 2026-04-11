@@ -32,6 +32,7 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
           <MediaCard
             key={entry.id}
             entry={entry}
+            isPlaying={playing?.id === entry.id}
             onPlay={setPlaying}
             onDelete={handleDelete}
           />

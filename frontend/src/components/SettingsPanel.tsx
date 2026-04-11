@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { FolderSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -20,21 +20,25 @@ export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
     skipped: number;
   } | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [saveTimer, setSaveTimer] = useState<ReturnType<
-    typeof setTimeout
-  > | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetch("/api/v1/settings")
       .then((r) => r.json())
-      .then((s: AppSettings) => {
-        setSettings(s);
-        if (s.media_scan_dir) setScanPath(s.media_scan_dir);
+      .then((s: unknown) => {
+        if (s && typeof s === "object") {
+          const settings = s as AppSettings;
+          setSettings(settings);
+          if (settings.media_scan_dir) setScanPath(settings.media_scan_dir);
+        }
       })
       .catch(() => {});
     fetch("/api/v1/system/status")
       .then((r) => r.json())
-      .then(setSystemStatus)
+      .then((data: unknown) => {
+        if (data && typeof data === "object")
+          setSystemStatus(data as SystemStatus);
+      })
       .catch(() => {});
   }, []);
 
@@ -43,20 +47,18 @@ export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
       setSettings((prev) => {
         if (!prev) return prev;
         const next = { ...prev, [key]: value };
-        // Debounced save
-        if (saveTimer) clearTimeout(saveTimer);
-        const timer = setTimeout(() => {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => {
           fetch("/api/v1/settings", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(next),
           });
         }, 500);
-        setSaveTimer(timer);
         return next;
       });
     },
-    [saveTimer],
+    [],
   );
 
   const handleScan = async () => {

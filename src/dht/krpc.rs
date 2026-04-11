@@ -103,7 +103,7 @@ impl KrpcSocket {
         query: KrpcQuery,
     ) -> Result<KrpcResponse, KrpcError> {
         let txn_id = next_txn_id();
-        let msg = self.encode_query(&txn_id, &query);
+        let msg = self.encode_query(txn_id, &query);
 
         let (tx, rx) = oneshot::channel();
         self.pending.insert(txn_id, tx);
@@ -227,7 +227,9 @@ impl KrpcSocket {
         Ok(())
     }
 
-    fn encode_query(&self, txn_id: &[u8; 2], query: &KrpcQuery) -> Vec<u8> {
+    // Method takes &self for API consistency even though only own_id is needed
+    #[allow(clippy::unused_self)]
+    fn encode_query(&self, txn_id: [u8; 2], query: &KrpcQuery) -> Vec<u8> {
         use std::collections::BTreeMap;
 
         let mut dict = BTreeMap::new();
@@ -276,7 +278,7 @@ impl KrpcSocket {
         r.insert(b"id".to_vec(), BValue::Bytes(self.own_id.0.to_vec()));
 
         match response {
-            KrpcResponse::Ping { .. } => {}
+            KrpcResponse::Ping { .. } | KrpcResponse::AnnouncePeer { .. } => {}
             KrpcResponse::FindNode { nodes, .. } => {
                 r.insert(
                     b"nodes".to_vec(),
@@ -306,13 +308,13 @@ impl KrpcSocket {
                     );
                 }
             }
-            KrpcResponse::AnnouncePeer { .. } => {}
         }
 
         dict.insert(b"r".to_vec(), BValue::Dict(r));
         bencode::encode(&BValue::Dict(dict))
     }
 
+    #[allow(clippy::unused_self)]
     fn decode_response(&self, val: &BValue) -> Option<KrpcResponse> {
         let r = val.get_str("r")?;
         let id_bytes = r.get_str("id")?.as_bytes()?;
@@ -345,7 +347,7 @@ impl KrpcSocket {
         let token = r
             .get_str("token")
             .and_then(|v| v.as_bytes())
-            .map(|b| b.to_vec());
+            .map(<[u8]>::to_vec);
 
         if !peers.is_empty() || !nodes.is_empty() || token.is_some() {
             Some(KrpcResponse::GetPeers {
@@ -359,6 +361,7 @@ impl KrpcSocket {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn decode_query(&self, val: &BValue) -> Option<KrpcQuery> {
         let q = val.get_str("q")?.as_str()?;
         let args = val.get_str("a")?;
@@ -462,6 +465,7 @@ fn decode_compact_peer(data: &[u8]) -> Option<SocketAddr> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
@@ -471,7 +475,7 @@ mod tests {
         let nodes = vec![
             (
                 NodeId([1u8; 20]),
-                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6881)),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6881)),
             ),
             (
                 NodeId([2u8; 20]),
@@ -491,7 +495,7 @@ mod tests {
         let nodes = vec![
             (
                 NodeId([1u8; 20]),
-                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6881)),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6881)),
             ),
             (
                 NodeId([2u8; 20]),

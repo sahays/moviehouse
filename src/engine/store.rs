@@ -1,69 +1,14 @@
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+pub use super::types::{AppSettings, DownloadRecord, MediaEntry, TranscodeState};
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-use super::library::{MediaEntry, TranscodeState};
-use super::session::SessionStatus;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppSettings {
-    pub lightspeed: bool,
-    pub max_download_speed: u64,
-    pub download_dir: PathBuf,
-    pub media_scan_dir: Option<PathBuf>,
-    pub auto_transcode: bool,
-    pub default_preset: String,
-    pub default_container: String,
-    pub tmdb_api_key: String,
-    #[serde(default = "default_true")]
-    pub enable_chunking: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            lightspeed: true,
-            max_download_speed: 0,
-            download_dir: PathBuf::from("."),
-            media_scan_dir: None,
-            auto_transcode: true,
-            default_preset: "compat-1080p".into(),
-            default_container: "mp4".into(),
-            tmdb_api_key: String::new(),
-            enable_chunking: true,
-        }
-    }
-}
-
-/// Persisted record for a download (what we need to restore it).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DownloadRecord {
-    pub id: Uuid,
-    pub name: String,
-    pub info_hash: String,
-    pub total_bytes: u64,
-    pub pieces_total: usize,
-    /// Raw .torrent metainfo bytes (so we can re-parse and resume)
-    pub metainfo_bytes: Vec<u8>,
-    /// Download options
-    pub output_dir: PathBuf,
-    pub lightspeed: bool,
-    /// Completed piece indices (for resume)
-    pub completed_pieces: Vec<u32>,
-    /// Final status snapshot
-    pub status: SessionStatus,
 }
 
 /// Persistent KV store backed by sled.
@@ -82,8 +27,9 @@ impl Store {
     }
 
     /// Open at a specific path.
-    pub fn open_at(path: PathBuf) -> anyhow::Result<Self> {
-        let db = sled::open(&path)?;
+    pub fn open_at(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        let db = sled::open(path)?;
         let downloads = db.open_tree("downloads")?;
         let library = db.open_tree("library")?;
         let settings = db.open_tree("settings")?;
@@ -116,7 +62,7 @@ impl Store {
     pub fn list_downloads(&self) -> anyhow::Result<Vec<DownloadRecord>> {
         let mut records = Vec::new();
         let mut corrupt_keys = Vec::new();
-        for result in self.downloads.iter() {
+        for result in &self.downloads {
             let (key, value) = result?;
             match serde_json::from_slice::<DownloadRecord>(&value) {
                 Ok(record) => records.push(record),
@@ -173,7 +119,7 @@ impl Store {
     pub fn list_media(&self) -> anyhow::Result<Vec<MediaEntry>> {
         let mut entries = Vec::new();
         let mut corrupt_keys = Vec::new();
-        for result in self.library.iter() {
+        for result in &self.library {
             let (key, value) = result?;
             match serde_json::from_slice::<MediaEntry>(&value) {
                 Ok(entry) => entries.push(entry),
@@ -248,13 +194,9 @@ impl Store {
                     entry.transcode_state = new_state;
                 }
 
-                // Failure
-                (TranscodeState::Transcoding { .. }, TranscodeState::Failed { .. }) => {
-                    entry.transcode_state = new_state;
-                }
-
-                // No ffmpeg
-                (TranscodeState::Pending, TranscodeState::Unavailable) => {
+                // Failure or no ffmpeg
+                (TranscodeState::Transcoding { .. }, TranscodeState::Failed { .. })
+                | (TranscodeState::Pending, TranscodeState::Unavailable) => {
                     entry.transcode_state = new_state;
                 }
 
@@ -267,8 +209,7 @@ impl Store {
                 // Invalid transition: log and ignore
                 _ => {
                     eprintln!(
-                        "Invalid transcode state transition: {:?} → {:?} (ignored)",
-                        old, new_state
+                        "Invalid transcode state transition: {old:?} → {new_state:?} (ignored)"
                     );
                     return Ok(());
                 }

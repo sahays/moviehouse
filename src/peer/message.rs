@@ -66,9 +66,8 @@ impl PeerMessage {
     /// Encode message to wire format (excluding the 4-byte length prefix — that's the codec's job).
     pub fn encode(&self, buf: &mut BytesMut) {
         match self {
-            PeerMessage::KeepAlive => {
-                // Empty payload, length prefix = 0 (handled by codec)
-            }
+            // KeepAlive has empty payload (codec adds length=0); Unknown is never sent
+            PeerMessage::KeepAlive | PeerMessage::Unknown(_) => {}
             PeerMessage::Choke => buf.put_u8(MSG_CHOKE),
             PeerMessage::Unchoke => buf.put_u8(MSG_UNCHOKE),
             PeerMessage::Interested => buf.put_u8(MSG_INTERESTED),
@@ -114,7 +113,6 @@ impl PeerMessage {
             }
             PeerMessage::HaveAll => buf.put_u8(MSG_HAVE_ALL),
             PeerMessage::HaveNone => buf.put_u8(MSG_HAVE_NONE),
-            PeerMessage::Unknown(_) => {} // never sent
         }
     }
 
@@ -180,11 +178,7 @@ impl PeerMessage {
             }
             MSG_HAVE_ALL => Ok(PeerMessage::HaveAll),
             MSG_HAVE_NONE => Ok(PeerMessage::HaveNone),
-            // BEP6: Suggest, Reject, Allowed Fast — skip gracefully
-            MSG_SUGGEST_PIECE | MSG_REJECT_REQUEST | MSG_ALLOWED_FAST => {
-                data.clear();
-                Ok(PeerMessage::Unknown(id))
-            }
+            // BEP6: Suggest, Reject, Allowed Fast, and any unknown message — skip gracefully
             _ => {
                 data.clear();
                 Ok(PeerMessage::Unknown(id))
@@ -196,15 +190,18 @@ impl PeerMessage {
     pub fn wire_len(&self) -> usize {
         match self {
             PeerMessage::KeepAlive => 0,
-            PeerMessage::Choke | PeerMessage::Unchoke => 1,
-            PeerMessage::Interested | PeerMessage::NotInterested => 1,
+            PeerMessage::Choke
+            | PeerMessage::Unchoke
+            | PeerMessage::Interested
+            | PeerMessage::NotInterested
+            | PeerMessage::HaveAll
+            | PeerMessage::HaveNone
+            | PeerMessage::Unknown(_) => 1,
             PeerMessage::Have { .. } => 5,
             PeerMessage::Bitfield(bf) => 1 + bf.len(),
             PeerMessage::Request { .. } | PeerMessage::Cancel { .. } => 13,
             PeerMessage::Piece { data, .. } => 9 + data.len(),
             PeerMessage::Extended { payload, .. } => 2 + payload.len(),
-            PeerMessage::HaveAll | PeerMessage::HaveNone => 1,
-            PeerMessage::Unknown(_) => 1,
         }
     }
 }

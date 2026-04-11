@@ -57,7 +57,9 @@ impl DhtHandle {
         };
 
         let mut krpc = KrpcSocket::bind(bind_addr, own_id).await?;
-        let inbound_rx = krpc.take_inbound_rx().unwrap();
+        let inbound_rx = krpc.take_inbound_rx().ok_or_else(|| {
+            std::io::Error::other("inbound rx unavailable after KrpcSocket::bind")
+        })?;
         let krpc = Arc::new(krpc);
         let routing_table = Arc::new(RwLock::new(RoutingTable::new(own_id)));
 
@@ -114,7 +116,7 @@ impl DhtHandle {
         Ok(Self { lookup_tx, cancel })
     }
 
-    /// Request peer discovery for an info_hash.
+    /// Request peer discovery for an `info_hash`.
     /// Returns a receiver that will stream peer batches as they're found.
     pub async fn get_peers(&self, info_hash: InfoHash) -> mpsc::Receiver<Vec<SocketAddr>> {
         let (peer_tx, peer_rx) = mpsc::channel(32);
@@ -125,6 +127,8 @@ impl DhtHandle {
         peer_rx
     }
 
+    // Async for API consistency with other subsystem shutdown methods
+    #[allow(clippy::unused_async)]
     pub async fn shutdown(&self) {
         self.cancel.cancel();
     }
@@ -147,7 +151,7 @@ async fn run_dht_node(
 
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => {
+            () = cancel.cancelled() => {
                 debug!("DHT node shutting down");
                 // Save routing table on shutdown in lightspeed mode
                 if lightspeed {
@@ -300,10 +304,11 @@ async fn bootstrap(krpc: &Arc<KrpcSocket>, routing_table: &Arc<RwLock<RoutingTab
                 Ok(resp) => {
                     // Handle both FindNode and GetPeers (decode_response may return either)
                     let (id, nodes) = match resp {
-                        KrpcResponse::FindNode { id, nodes } => (id, nodes),
-                        KrpcResponse::GetPeers { id, nodes, .. } => (id, nodes),
-                        KrpcResponse::Ping { id } => (id, vec![]),
-                        _ => continue,
+                        KrpcResponse::FindNode { id, nodes }
+                        | KrpcResponse::GetPeers { id, nodes, .. } => (id, nodes),
+                        KrpcResponse::Ping { id } | KrpcResponse::AnnouncePeer { id } => {
+                            (id, vec![])
+                        }
                     };
                     routing_table.write().await.insert_or_update(id, addr);
                     for (nid, naddr) in nodes {

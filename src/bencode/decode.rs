@@ -57,7 +57,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Decode one BValue. Returns the value and the byte range it occupied.
+    /// Decode one `BValue`. Returns the value and the byte range it occupied.
     pub fn decode(&mut self) -> Result<DecodeResult, DecodeError> {
         let start = self.pos;
         let value = self.decode_value()?;
@@ -214,9 +214,8 @@ impl<'a> Decoder<'a> {
                 return Err(DecodeError::TooManyElements(self.pos));
             }
             let key_start = self.pos;
-            let key = match self.decode_value()? {
-                BValue::Bytes(k) => k,
-                _ => return Err(DecodeError::InvalidByte(self.data[key_start], key_start)),
+            let BValue::Bytes(key) = self.decode_value()? else {
+                return Err(DecodeError::InvalidByte(self.data[key_start], key_start));
             };
 
             // BEP3 requires sorted keys, but real-world peers often don't comply.
@@ -250,6 +249,7 @@ impl From<DecodeError> for Result<(), DecodeError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

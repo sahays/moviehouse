@@ -78,9 +78,9 @@ export function FolderPicker({ onSelect }: FolderPickerProps) {
               </div>
 
               <div className="max-h-72 overflow-y-auto overflow-x-hidden border rounded-md">
-                {result.parent && (
+                {result.parent != null && (
                   <button
-                    onClick={() => browse(result.parent!)}
+                    onClick={() => browse(result.parent ?? undefined)}
                     className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:bg-accent/50 transition-colors border-b"
                   >
                     <FolderUp size={16} />

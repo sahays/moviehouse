@@ -10,8 +10,8 @@ const UNCHOKE_SLOTS: usize = 4;
 
 /// Run the choking algorithm.
 ///
-/// Every 10 seconds: unchoke the top UNCHOKE_SLOTS peers by download rate.
-/// Every 30 seconds (optimistic_round): additionally unchoke 1 random choked+interested peer.
+/// Every 10 seconds: unchoke the top `UNCHOKE_SLOTS` peers by download rate.
+/// Every 30 seconds (`optimistic_round)`: additionally unchoke 1 random choked+interested peer.
 pub fn run_choking_algorithm(
     peer_manager: &PeerManager,
     optimistic_round: bool,

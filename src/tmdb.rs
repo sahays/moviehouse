@@ -63,7 +63,8 @@ pub async fn fetch_metadata(
         urlencoding(title)
     );
     if let Some(y) = year {
-        url.push_str(&format!("&year={y}"));
+        use std::fmt::Write;
+        let _ = write!(url, "&year={y}");
     }
 
     let search: SearchResult = client.get(&url).send().await.ok()?.json().await.ok()?;

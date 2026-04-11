@@ -23,8 +23,8 @@ pub struct MagnetLink {
 impl MagnetLink {
     /// Parse a magnet URI.
     ///
-    /// Format: magnet:?xt=urn:btih:<info_hash>&dn=<name>&tr=<tracker_url>
-    /// info_hash can be 40-char hex or 32-char base32.
+    /// Format: magnet:?xt=urn:btih:<`info_hash>&dn`=<name>&tr=<`tracker_url`>
+    /// `info_hash` can be 40-char hex or 32-char base32.
     pub fn parse(uri: &str) -> Result<Self, MagnetError> {
         if !uri.starts_with("magnet:?") {
             return Err(MagnetError::NotMagnet);
@@ -103,6 +103,7 @@ fn percent_decode(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

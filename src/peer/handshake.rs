@@ -6,7 +6,7 @@ use crate::torrent::types::{InfoHash, PeerId};
 pub const PROTOCOL_STRING: &[u8; 19] = b"BitTorrent protocol";
 pub const HANDSHAKE_SIZE: usize = 68; // 1 + 19 + 8 + 20 + 20
 
-/// BitTorrent handshake message (68 bytes).
+/// `BitTorrent` handshake message (68 bytes).
 #[derive(Debug, Clone)]
 pub struct Handshake {
     pub reserved: [u8; 8],

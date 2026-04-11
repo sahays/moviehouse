@@ -63,7 +63,7 @@ pub struct FileEntry {
 
 impl Metainfo {
     /// Parse a .torrent file from raw bytes.
-    /// Computes info_hash from the raw bytes of the info dictionary (not re-encoded).
+    /// Computes `info_hash` from the raw bytes of the info dictionary (not re-encoded).
     pub fn from_bytes(data: &[u8]) -> Result<Self, MetainfoError> {
         let mut decoder = Decoder::new(data);
         let result = decoder.decode()?;
@@ -102,7 +102,9 @@ impl Metainfo {
             })
         });
 
-        let creation_date = root.get_str("creation date").and_then(|v| v.as_int());
+        let creation_date = root
+            .get_str("creation date")
+            .and_then(super::super::bencode::value::BValue::as_int);
         let comment = root
             .get_str("comment")
             .and_then(|v| v.as_str())
@@ -212,7 +214,7 @@ impl Info {
     }
 }
 
-/// Compute info_hash by finding the raw bytes of the "info" dictionary value.
+/// Compute `info_hash` by finding the raw bytes of the "info" dictionary value.
 fn compute_info_hash(data: &[u8]) -> Result<InfoHash, MetainfoError> {
     // Walk the top-level dict to find the byte range of the "info" key's value.
     let decoder = Decoder::new(data);
@@ -266,7 +268,7 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
 
     let piece_length_raw = val
         .get_str("piece length")
-        .and_then(|v| v.as_int())
+        .and_then(super::super::bencode::value::BValue::as_int)
         .ok_or(MetainfoError::MissingField("piece length"))?;
     if piece_length_raw <= 0 || piece_length_raw > 256 * 1024 * 1024 {
         return Err(MetainfoError::InvalidPieceLength(format!(
@@ -313,7 +315,7 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         for f in files_list {
             let length_raw = f
                 .get_str("length")
-                .and_then(|v| v.as_int())
+                .and_then(super::super::bencode::value::BValue::as_int)
                 .ok_or(MetainfoError::MissingField("files[].length"))?;
             if length_raw < 0 {
                 return Err(MetainfoError::NegativeFileLength(length_raw));
@@ -344,7 +346,7 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         // Single-file mode
         let length_raw = val
             .get_str("length")
-            .and_then(|v| v.as_int())
+            .and_then(super::super::bencode::value::BValue::as_int)
             .ok_or(MetainfoError::MissingField("length"))?;
         if length_raw < 0 {
             return Err(MetainfoError::NegativeFileLength(length_raw));
@@ -368,6 +370,7 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::bencode::encode::encode;

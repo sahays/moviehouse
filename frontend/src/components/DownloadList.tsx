@@ -4,39 +4,15 @@ import { Button } from "@/components/ui/button";
 import type { SessionStatus } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SpeedGraph, type DataPoint } from "./SpeedGraph";
+import {
+  formatBytes,
+  formatSpeed,
+  formatTime,
+  formatDuration,
+} from "@/lib/formatters";
 
 interface DownloadListProps {
   torrents: Map<string, SessionStatus>;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-function formatSpeed(mibPerSec: number): string {
-  if (mibPerSec < 0.01) return "0 B/s";
-  if (mibPerSec < 1) return `${(mibPerSec * 1024).toFixed(0)} KB/s`;
-  return `${mibPerSec.toFixed(1)} MB/s`;
-}
-
-function formatTime(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 function formatElapsed(startedAt: number): string {
@@ -286,18 +262,22 @@ export function DownloadList({ torrents }: DownloadListProps) {
     }
   }, []);
 
-  const sorted = Array.from(torrents.values()).sort((a, b) => {
-    // Active downloads first, then completed, then rest
-    const order: Record<string, number> = {
-      Downloading: 0,
-      Completed: 1,
-      Cancelled: 2,
-    };
-    const aOrder = typeof a.state === "string" ? (order[a.state] ?? 3) : 3;
-    const bOrder = typeof b.state === "string" ? (order[b.state] ?? 3) : 3;
-    if (aOrder !== bOrder) return aOrder - bOrder;
-    return a.name.localeCompare(b.name);
-  });
+  const sorted = useMemo(
+    () =>
+      Array.from(torrents.values()).sort((a, b) => {
+        // Active downloads first, then completed, then rest
+        const order: Record<string, number> = {
+          Downloading: 0,
+          Completed: 1,
+          Cancelled: 2,
+        };
+        const aOrder = typeof a.state === "string" ? (order[a.state] ?? 3) : 3;
+        const bOrder = typeof b.state === "string" ? (order[b.state] ?? 3) : 3;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return a.name.localeCompare(b.name);
+      }),
+    [torrents],
+  );
 
   if (sorted.length === 0) {
     return (

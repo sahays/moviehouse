@@ -19,17 +19,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { MediaEntry, TranscodeState } from "../types";
 import { TranscodeOptions } from "./TranscodeOptions";
+import { formatBytes, formatDuration } from "@/lib/formatters";
+import { useSettings } from "@/contexts/SettingsContext";
 
 interface MediaCardProps {
   entry: MediaEntry;
+  isPlaying?: boolean;
   onPlay: (entry: MediaEntry) => void;
   onDelete: (id: string) => void;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + " GB";
-  if (bytes >= 1048576) return (bytes / 1048576).toFixed(0) + " MB";
-  return (bytes / 1024).toFixed(0) + " KB";
 }
 
 function getStateLabel(state: TranscodeState): string {
@@ -76,10 +73,11 @@ function getStateBadgeClasses(state: TranscodeState): string {
   return `${base} bg-gray-500/15 text-gray-400`;
 }
 
-export function MediaCard({ entry, onPlay, onDelete }: MediaCardProps) {
+export function MediaCard({ entry, isPlaying, onPlay, onDelete }: MediaCardProps) {
   const [showTranscode, setShowTranscode] = useState(false);
-  const [autoTranscode, setAutoTranscode] = useState(true);
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
+  const settings = useSettings();
+  const autoTranscode = settings?.auto_transcode ?? true;
 
   const playable = isPlayable(entry);
   const stateLabel = getStateLabel(entry.transcode_state);
@@ -91,13 +89,6 @@ export function MediaCard({ entry, onPlay, onDelete }: MediaCardProps) {
   const isIndeterminate = transcoding && progress === -1;
 
   useEffect(() => {
-    fetch("/api/v1/settings")
-      .then((r) => r.json())
-      .then((s) => setAutoTranscode(s.auto_transcode))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
     if (!transcoding) return;
     const interval = setInterval(
       () => setNowSecs(Math.floor(Date.now() / 1000)),
@@ -107,11 +98,19 @@ export function MediaCard({ entry, onPlay, onDelete }: MediaCardProps) {
   }, [transcoding]);
 
   return (
-    <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg overflow-hidden hover:border-[var(--color-border-hover)] transition-colors flex">
+    <div className={`bg-[var(--color-bg-secondary)] border rounded-lg overflow-hidden transition-colors flex ${isPlaying ? "border-blue-500 ring-1 ring-blue-500/30" : "border-[var(--color-border)] hover:border-[var(--color-border-hover)]"}`}>
       {/* Poster — 2:3 aspect ratio, left side */}
       <div
+        role={playable ? "button" : undefined}
+        tabIndex={playable ? 0 : undefined}
         className={`relative w-40 sm:w-44 shrink-0 aspect-[2/3] bg-gradient-to-br from-blue-900/40 to-cyan-900/30 flex items-center justify-center overflow-hidden group ${playable ? "cursor-pointer" : ""}`}
         onClick={() => playable && onPlay(entry)}
+        onKeyDown={(e) => {
+          if (playable && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            onPlay(entry);
+          }
+        }}
       >
         {entry.poster_url ? (
           <img
@@ -124,14 +123,23 @@ export function MediaCard({ entry, onPlay, onDelete }: MediaCardProps) {
             {entry.title.charAt(0).toUpperCase()}
           </span>
         )}
-        {playable && (
+        {isPlaying ? (
+          <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center gap-1">
+            <div className="flex items-center gap-1">
+              <span className="w-1 h-3 bg-blue-400 rounded-full animate-pulse" />
+              <span className="w-1 h-4 bg-blue-400 rounded-full animate-pulse [animation-delay:150ms]" />
+              <span className="w-1 h-3 bg-blue-400 rounded-full animate-pulse [animation-delay:300ms]" />
+            </div>
+            <span className="text-xs font-medium text-blue-300">Now Playing</span>
+          </div>
+        ) : playable ? (
           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
             <Play
               size={36}
               className="text-white/0 group-hover:text-white/90 transition-colors fill-current"
             />
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Details — right side */}
@@ -182,7 +190,7 @@ export function MediaCard({ entry, onPlay, onDelete }: MediaCardProps) {
               {entry.rating.toFixed(1)}
             </span>
           )}
-          <span>{formatSize(entry.file_size)}</span>
+          <span>{formatBytes(entry.file_size)}</span>
         </div>
 
         {/* Director */}
@@ -293,19 +301,13 @@ export function MediaCard({ entry, onPlay, onDelete }: MediaCardProps) {
                     ? Math.floor((elapsedSecs * (100 - progress)) / progress)
                     : 0,
                 );
-                const fmtDur = (s: number) => {
-                  if (s < 60) return `${s}s`;
-                  const m = Math.floor(s / 60);
-                  if (m < 60) return `${m}m ${s % 60}s`;
-                  return `${Math.floor(m / 60)}h ${m % 60}m`;
-                };
                 return (
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-xs text-[var(--color-text-tertiary)]">
-                      {fmtDur(elapsedSecs)} elapsed
+                      {formatDuration(elapsedSecs)} elapsed
                       {etaSecs > 0 && (
                         <span className="ml-1">
-                          / ~{fmtDur(etaSecs)} remaining
+                          / ~{formatDuration(etaSecs)} remaining
                         </span>
                       )}
                     </span>

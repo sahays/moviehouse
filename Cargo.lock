@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "moviehouse"
-version = "1.11.129"
+version = "1.11.174"
 dependencies = [
  "anyhow",
  "axum",

@@ -11,7 +11,7 @@ use crate::torrent::types::InfoHash;
 const ALPHA: usize = 3; // concurrency factor
 const K: usize = 8; // result set size
 
-/// Iterative get_peers lookup.
+/// Iterative `get_peers` lookup.
 /// Returns discovered peer addresses and sends them via the channel as they're found.
 pub async fn iterative_get_peers(
     krpc: &Arc<KrpcSocket>,
@@ -72,52 +72,50 @@ pub async fn iterative_get_peers(
 
         for handle in handles {
             if let Ok((node_id, addr, result)) = handle.await {
-                match result {
-                    Ok(resp) => {
-                        // Handle any response type (decode can't reliably distinguish)
-                        let (id, token, peers, nodes) = match resp {
-                            KrpcResponse::GetPeers {
-                                id,
-                                token,
-                                peers,
-                                nodes,
-                            } => (id, token, peers, nodes),
-                            KrpcResponse::FindNode { id, nodes } => (id, None, vec![], nodes),
-                            KrpcResponse::Ping { id } => (id, None, vec![], vec![]),
-                            _ => continue,
-                        };
-
-                        // Mark as responded
-                        if let Some(c) = candidates.iter_mut().find(|(cid, _, _)| *cid == node_id) {
-                            c.2 = CandidateState::Responded;
+                if let Ok(resp) = result {
+                    // Handle any response type (decode can't reliably distinguish)
+                    let (id, token, peers, nodes) = match resp {
+                        KrpcResponse::GetPeers {
+                            id,
+                            token,
+                            peers,
+                            nodes,
+                        } => (id, token, peers, nodes),
+                        KrpcResponse::FindNode { id, nodes } => (id, None, vec![], nodes),
+                        KrpcResponse::Ping { id } | KrpcResponse::AnnouncePeer { id } => {
+                            (id, None, vec![], vec![])
                         }
+                    };
 
-                        // Update routing table
-                        routing_table.write().await.insert_or_update(id, addr);
-                        routing_table.write().await.mark_good(&id);
+                    // Mark as responded
+                    if let Some(c) = candidates.iter_mut().find(|(cid, _, _)| *cid == node_id) {
+                        c.2 = CandidateState::Responded;
+                    }
 
-                        // Store token for later announce
-                        tokens.push((id, addr, token));
+                    // Update routing table
+                    routing_table.write().await.insert_or_update(id, addr);
+                    routing_table.write().await.mark_good(&id);
 
-                        // Add new peers
-                        if !peers.is_empty() {
-                            let _ = peer_tx.send(peers.clone()).await;
-                            all_peers.extend(peers);
-                        }
+                    // Store token for later announce
+                    tokens.push((id, addr, token));
 
-                        // Add new candidates
-                        for (nid, naddr) in nodes {
-                            if !candidates.iter().any(|(id, _, _)| *id == nid) {
-                                candidates.push((nid, naddr, CandidateState::NotQueried));
-                            }
+                    // Add new peers
+                    if !peers.is_empty() {
+                        let _ = peer_tx.send(peers.clone()).await;
+                        all_peers.extend(peers);
+                    }
+
+                    // Add new candidates
+                    for (nid, naddr) in nodes {
+                        if !candidates.iter().any(|(id, _, _)| *id == nid) {
+                            candidates.push((nid, naddr, CandidateState::NotQueried));
                         }
                     }
-                    Err(_) => {
-                        if let Some(c) = candidates.iter_mut().find(|(cid, _, _)| *cid == node_id) {
-                            c.2 = CandidateState::Failed;
-                        }
-                        routing_table.write().await.mark_failed(&node_id);
+                } else {
+                    if let Some(c) = candidates.iter_mut().find(|(cid, _, _)| *cid == node_id) {
+                        c.2 = CandidateState::Failed;
                     }
+                    routing_table.write().await.mark_failed(&node_id);
                 }
             }
         }
@@ -145,7 +143,7 @@ pub async fn iterative_get_peers(
     tokens
 }
 
-/// Iterative find_node lookup (for bootstrap and bucket refresh).
+/// Iterative `find_node` lookup (for bootstrap and bucket refresh).
 pub async fn iterative_find_node(
     krpc: &Arc<KrpcSocket>,
     routing_table: &Arc<RwLock<RoutingTable>>,
@@ -164,7 +162,7 @@ pub async fn iterative_find_node(
             .iter()
             .filter(|(id, _)| !queried.contains(id))
             .take(ALPHA)
-            .cloned()
+            .copied()
             .collect();
 
         if to_query.is_empty() {
@@ -190,10 +188,9 @@ pub async fn iterative_find_node(
             if let Ok((resp_addr, Ok(resp))) = handle.await {
                 // Handle both FindNode and GetPeers responses (decode can't distinguish)
                 let (id, nodes) = match resp {
-                    KrpcResponse::FindNode { id, nodes } => (id, nodes),
-                    KrpcResponse::GetPeers { id, nodes, .. } => (id, nodes),
-                    KrpcResponse::Ping { id } => (id, vec![]),
-                    _ => continue,
+                    KrpcResponse::FindNode { id, nodes }
+                    | KrpcResponse::GetPeers { id, nodes, .. } => (id, nodes),
+                    KrpcResponse::Ping { id } | KrpcResponse::AnnouncePeer { id } => (id, vec![]),
                 };
                 routing_table.write().await.insert_or_update(id, resp_addr);
                 routing_table.write().await.mark_good(&id);

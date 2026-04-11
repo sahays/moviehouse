@@ -1,13 +1,13 @@
 use super::value::BValue;
 
-/// Encode a BValue to bencode bytes.
+/// Encode a `BValue` to bencode bytes.
 pub fn encode(value: &BValue) -> Vec<u8> {
     let mut buf = Vec::new();
     encode_to(value, &mut buf);
     buf
 }
 
-/// Encode a BValue directly into a buffer.
+/// Encode a `BValue` directly into a buffer.
 pub fn encode_to(value: &BValue, buf: &mut Vec<u8>) {
     match value {
         BValue::Int(n) => {
@@ -42,6 +42,7 @@ pub fn encode_to(value: &BValue, buf: &mut Vec<u8>) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::bencode::decode;
@@ -77,7 +78,7 @@ mod tests {
         for input in inputs {
             let decoded = decode::decode(input).unwrap();
             let reencoded = encode(&decoded);
-            assert_eq!(reencoded, *input, "roundtrip failed for {:?}", input);
+            assert_eq!(reencoded, *input, "roundtrip failed for {input:?}");
         }
     }
 }

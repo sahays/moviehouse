@@ -76,7 +76,7 @@ impl TrackerManager {
 
         loop {
             tokio::select! {
-                _ = self.cancel.cancelled() => {
+                () = self.cancel.cancelled() => {
                     // Send stopped event (best-effort, short timeout)
                     for url in &self.tracker_urls {
                         let _ = tokio::time::timeout(

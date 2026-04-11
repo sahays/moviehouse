@@ -11,7 +11,7 @@ pub enum BValue {
     /// List: "l4:spami42ee" -> List([Bytes("spam"), Int(42)])
     List(Vec<BValue>),
     /// Dictionary: keys must be sorted byte strings.
-    /// Uses BTreeMap for automatic sorted order (required for info_hash computation).
+    /// Uses `BTreeMap` for automatic sorted order (required for `info_hash` computation).
     Dict(BTreeMap<Vec<u8>, BValue>),
 }
 

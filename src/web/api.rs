@@ -127,7 +127,7 @@ pub async fn add_torrent(
                         .into_response();
                 }
             };
-            let _magnet = match MagnetLink::parse(&text) {
+            let magnet = match MagnetLink::parse(&text) {
                 Ok(m) => m,
                 Err(e) => {
                     return (
@@ -139,12 +139,49 @@ pub async fn add_torrent(
                         .into_response();
                 }
             };
-            // For now, return an error -- magnet requires metadata download phase which is more complex
+
+            // Spawn magnet download: phase 1 (metadata) then phase 2 (pieces)
+            let manager = state.manager.clone();
+            let opts = default_opts(&state.store);
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let our_peer_id = crate::torrent::types::PeerId::generate();
+
+            tokio::spawn(async move {
+                eprintln!("Magnet: resolving metadata for {}", magnet.display_name.as_deref().unwrap_or("?"));
+
+                // Phase 1: download metadata from peers
+                let result = crate::engine::magnet::download_metadata(
+                    &magnet,
+                    our_peer_id,
+                    opts.port,
+                    opts.max_peers,
+                    opts.no_dht,
+                    opts.lightspeed,
+                    cancel.clone(),
+                )
+                .await;
+
+                match result {
+                    Ok((metainfo, _warm_peers)) => {
+                        eprintln!(
+                            "Magnet: metadata resolved — {} ({:.2} MiB)",
+                            metainfo.info.name,
+                            metainfo.info.total_length as f64 / (1024.0 * 1024.0),
+                        );
+                        let metainfo_bytes = crate::bencode::encode::encode(
+                            &crate::bencode::value::BValue::Bytes(vec![]),
+                        ); // placeholder — magnet doesn't have raw bytes
+                        manager.add_torrent(metainfo, metainfo_bytes, opts).await;
+                    }
+                    Err(e) => {
+                        eprintln!("Magnet: metadata resolution failed: {e}");
+                    }
+                }
+            });
+
             return (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(ApiError {
-                    error: "magnet support via API coming soon".into(),
-                }),
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({ "status": "resolving magnet" })),
             )
                 .into_response();
         }
@@ -223,14 +260,14 @@ pub async fn delete_library_item(
     StatusCode::NO_CONTENT
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn stream_media(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let entry = match state.store.get_media(&id) {
-        Ok(Some(e)) => e,
-        _ => return StatusCode::NOT_FOUND.into_response(),
+    let Ok(Some(entry)) = state.store.get_media(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
     };
 
     // Pick the best available version to play:
@@ -270,9 +307,8 @@ pub async fn stream_media(
     // For HLS: rewrite .m3u8 segment URLs to point at our segment API
     let is_hls = file_path.extension().and_then(|e| e.to_str()) == Some("m3u8");
     if is_hls {
-        let content = match tokio::fs::read_to_string(&file_path).await {
-            Ok(c) => c,
-            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        let Ok(content) = tokio::fs::read_to_string(&file_path).await else {
+            return StatusCode::NOT_FOUND.into_response();
         };
         // Rewrite segment filenames to API URLs
         let rewritten: String = content
@@ -297,14 +333,12 @@ pub async fn stream_media(
             .into_response();
     }
 
-    let file = match tokio::fs::File::open(&file_path).await {
-        Ok(f) => f,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    let Ok(file) = tokio::fs::File::open(&file_path).await else {
+        return StatusCode::NOT_FOUND.into_response();
     };
 
-    let metadata = match file.metadata().await {
-        Ok(m) => m,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let Ok(metadata) = file.metadata().await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
 
     let total_size = metadata.len();
@@ -379,9 +413,8 @@ pub async fn stream_segment(
     State(state): State<Arc<AppState>>,
     Path((id, filename)): Path<(Uuid, String)>,
 ) -> impl IntoResponse {
-    let entry = match state.store.get_media(&id) {
-        Ok(Some(e)) => e,
-        _ => return StatusCode::NOT_FOUND.into_response(),
+    let Ok(Some(entry)) = state.store.get_media(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
     };
 
     let base_dir = match &entry.transcode_state {
@@ -398,14 +431,17 @@ pub async fn stream_segment(
     }
 
     let segment_path = base_dir.join(&filename);
-    let file = match tokio::fs::File::open(&segment_path).await {
-        Ok(f) => f,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    let Ok(file) = tokio::fs::File::open(&segment_path).await else {
+        return StatusCode::NOT_FOUND.into_response();
     };
 
-    let content_type = if filename.ends_with(".ts") {
+    let ext = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let content_type = if ext.eq_ignore_ascii_case("ts") {
         "video/mp2t"
-    } else if filename.ends_with(".m3u8") {
+    } else if ext.eq_ignore_ascii_case("m3u8") {
         "application/vnd.apple.mpegurl"
     } else {
         "application/octet-stream"
@@ -425,7 +461,18 @@ pub async fn stream_segment(
 // ── Settings ──
 
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(state.store.get_settings())
+    let settings = state.store.get_settings();
+    // Filter sensitive fields — never expose API keys to the frontend
+    Json(serde_json::json!({
+        "lightspeed": settings.lightspeed,
+        "max_download_speed": settings.max_download_speed,
+        "download_dir": settings.download_dir,
+        "media_scan_dir": settings.media_scan_dir,
+        "auto_transcode": settings.auto_transcode,
+        "default_preset": settings.default_preset,
+        "default_container": settings.default_container,
+        "enable_chunking": settings.enable_chunking,
+    }))
 }
 
 pub async fn put_settings(
@@ -463,17 +510,14 @@ pub async fn manual_transcode(
     Path(id): Path<Uuid>,
     Json(req): Json<TranscodeRequest>,
 ) -> impl IntoResponse {
-    let entry = match state.store.get_media(&id) {
-        Ok(Some(e)) => e,
-        _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ApiError {
-                    error: "not found".into(),
-                }),
-            )
-                .into_response();
-        }
+    let Ok(Some(entry)) = state.store.get_media(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not found".into(),
+            }),
+        )
+            .into_response();
     };
 
     if matches!(
@@ -551,12 +595,33 @@ pub struct BrowseQuery {
 }
 
 pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
     let path = query
         .path
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")));
+        .map_or_else(|| home.clone(), std::path::PathBuf::from);
 
-    if !path.is_dir() {
+    // Security: canonicalize to resolve symlinks, restrict to home directory
+    let Ok(canonical) = std::fs::canonicalize(&path) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "path not found".into(),
+            }),
+        )
+            .into_response();
+    };
+    let canonical_home = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
+    if !canonical.starts_with(&canonical_home) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "access denied: path outside home directory".into(),
+            }),
+        )
+            .into_response();
+    }
+
+    if !canonical.is_dir() {
         return (
             StatusCode::BAD_REQUEST,
             Json(ApiError {
@@ -644,17 +709,14 @@ pub async fn refresh_metadata(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let entry = match state.store.get_media(&id) {
-        Ok(Some(e)) => e,
-        _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ApiError {
-                    error: "not found".into(),
-                }),
-            )
-                .into_response();
-        }
+    let Ok(Some(entry)) = state.store.get_media(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not found".into(),
+            }),
+        )
+            .into_response();
     };
 
     let settings = state.store.get_settings();
@@ -675,7 +737,7 @@ pub async fn refresh_metadata(
             && let Ok(Some(mut entry)) = store.get_media(&id)
         {
             if let Some(ref title) = meta.title {
-                entry.title = title.clone();
+                entry.title.clone_from(title);
             }
             entry.poster_url = meta.poster_url;
             entry.overview = meta.overview;
@@ -697,6 +759,7 @@ pub async fn refresh_metadata(
         .into_response()
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn scan_folder(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScanRequest>,
@@ -794,7 +857,7 @@ pub async fn scan_folder(
                     && let Ok(Some(mut entry)) = store_for_tmdb.get_media(&entry_id)
                 {
                     if let Some(ref title) = meta.title {
-                        entry.title = title.clone();
+                        entry.title.clone_from(title);
                     }
                     entry.poster_url = meta.poster_url;
                     entry.overview = meta.overview;

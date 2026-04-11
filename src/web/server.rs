@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::http::Method;
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{Html, IntoResponse, Response};
 use rust_embed::Embed;
@@ -20,7 +21,7 @@ pub struct AppState {
     pub transcode: TranscodeHandle,
 }
 
-pub fn create_router(state: Arc<AppState>) -> Router {
+pub fn create_router(state: &Arc<AppState>) -> Router {
     let api = Router::new()
         .route(
             "/api/v1/torrents",
@@ -86,10 +87,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .with_state(state.clone());
 
-    Router::new()
-        .merge(api)
-        .fallback(static_handler)
-        .layer(CorsLayer::permissive())
+    Router::new().merge(api).fallback(static_handler).layer(
+        CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([header::CONTENT_TYPE]),
+    )
 }
 
 async fn static_handler(uri: Uri) -> Response {

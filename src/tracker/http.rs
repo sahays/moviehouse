@@ -42,6 +42,8 @@ pub async fn http_announce(
     left: u64,
     event: Option<&str>,
 ) -> Result<AnnounceResponse, TrackerError> {
+    const MAX_RESPONSE_SIZE: u64 = 1_048_576; // 1 MiB
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
@@ -56,13 +58,12 @@ pub async fn http_announce(
     );
 
     if let Some(event) = event {
-        url.push_str(&format!("&event={event}"));
+        use std::fmt::Write;
+        let _ = write!(url, "&event={event}");
     }
 
     let full_url = format!("{tracker_url}{url}");
     debug!(url = %full_url, "Announcing to tracker");
-
-    const MAX_RESPONSE_SIZE: u64 = 1_048_576; // 1 MiB
 
     let response = client.get(&full_url).send().await?;
     let status = response.status();
@@ -100,22 +101,22 @@ pub async fn http_announce(
 
     let interval = val
         .get_str("interval")
-        .and_then(|v| v.as_int())
+        .and_then(super::super::bencode::value::BValue::as_int)
         .unwrap_or(1800) as u32;
 
     let min_interval = val
         .get_str("min interval")
-        .and_then(|v| v.as_int())
+        .and_then(super::super::bencode::value::BValue::as_int)
         .map(|n| n as u32);
 
     let seeders = val
         .get_str("complete")
-        .and_then(|v| v.as_int())
+        .and_then(super::super::bencode::value::BValue::as_int)
         .map(|n| n as u32);
 
     let leechers = val
         .get_str("incomplete")
-        .and_then(|v| v.as_int())
+        .and_then(super::super::bencode::value::BValue::as_int)
         .map(|n| n as u32);
 
     // Parse compact peer list

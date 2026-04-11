@@ -21,7 +21,7 @@ pub struct ExtendedHandshake {
 }
 
 impl ExtendedHandshake {
-    /// Create our handshake offering ut_metadata support (and optionally ut_pex).
+    /// Create our handshake offering `ut_metadata` support (and optionally `ut_pex`).
     pub fn ours(metadata_size: Option<u64>, lightspeed: bool) -> Self {
         let mut m = HashMap::new();
         m.insert("ut_metadata".to_string(), 1);
@@ -59,10 +59,13 @@ impl ExtendedHandshake {
         }
 
         if let Some(size) = self.metadata_size {
+            // metadata_size is always small enough to fit in i64
+            #[allow(clippy::cast_possible_wrap)]
             dict.insert(b"metadata_size".to_vec(), BValue::Int(size as i64));
         }
 
         if let Some(reqq) = self.reqq {
+            #[allow(clippy::cast_possible_wrap)]
             dict.insert(b"reqq".to_vec(), BValue::Int(reqq as i64));
         }
 
@@ -91,16 +94,16 @@ impl ExtendedHandshake {
         let v = val.get_str("v").and_then(|v| v.as_str()).map(String::from);
         let p = val
             .get_str("p")
-            .and_then(|v| v.as_int())
+            .and_then(super::super::bencode::value::BValue::as_int)
             .filter(|&n| n > 0 && n <= 65535)
             .map(|n| n as u16);
         let metadata_size = val
             .get_str("metadata_size")
-            .and_then(|v| v.as_int())
+            .and_then(super::super::bencode::value::BValue::as_int)
             .map(|n| n as u64);
         let reqq = val
             .get_str("reqq")
-            .and_then(|v| v.as_int())
+            .and_then(super::super::bencode::value::BValue::as_int)
             .map(|n| n as u64);
 
         Ok(Self {
@@ -152,6 +155,7 @@ impl MetadataMessage {
             } => {
                 dict.insert(b"msg_type".to_vec(), BValue::Int(1));
                 dict.insert(b"piece".to_vec(), BValue::Int(*piece as i64));
+                #[allow(clippy::cast_possible_wrap)]
                 dict.insert(b"total_size".to_vec(), BValue::Int(*total_size as i64));
                 // The data is appended AFTER the bencoded dict (not inside it)
                 let mut encoded = bencode::encode(&BValue::Dict(dict));
@@ -179,11 +183,11 @@ impl MetadataMessage {
         let val = result.value;
         let msg_type = val
             .get_str("msg_type")
-            .and_then(|v| v.as_int())
+            .and_then(super::super::bencode::value::BValue::as_int)
             .ok_or(ExtensionError::InvalidFormat)?;
         let piece = val
             .get_str("piece")
-            .and_then(|v| v.as_int())
+            .and_then(super::super::bencode::value::BValue::as_int)
             .ok_or(ExtensionError::InvalidFormat)? as u32;
 
         match msg_type {
@@ -191,7 +195,7 @@ impl MetadataMessage {
             1 => {
                 let total_size = val
                     .get_str("total_size")
-                    .and_then(|v| v.as_int())
+                    .and_then(super::super::bencode::value::BValue::as_int)
                     .ok_or(ExtensionError::InvalidFormat)? as u64;
                 let data = Bytes::copy_from_slice(&payload[consumed..]);
                 Ok(MetadataMessage::Data {
@@ -229,6 +233,7 @@ impl PexMessage {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::bencode::encode::encode;

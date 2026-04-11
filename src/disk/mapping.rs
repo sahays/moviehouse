@@ -62,9 +62,8 @@ impl FileMapping {
     /// Get the file spans that a piece covers.
     /// A single piece can span multiple files in a multi-file torrent.
     pub fn piece_spans(&self, piece_index: u32) -> Vec<FileSpan> {
-        let piece_start = match (piece_index as u64).checked_mul(self.piece_length) {
-            Some(v) => v,
-            None => return Vec::new(),
+        let Some(piece_start) = (piece_index as u64).checked_mul(self.piece_length) else {
+            return Vec::new();
         };
         if piece_start >= self.total_length {
             return Vec::new();
@@ -120,6 +119,7 @@ impl FileMapping {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::torrent::metainfo::{FileLayout, Info};

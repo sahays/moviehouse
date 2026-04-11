@@ -1,6 +1,6 @@
 use std::fmt;
 
-/// 20-byte SHA1 hash used as info_hash and piece hashes.
+/// 20-byte SHA1 hash used as `info_hash` and piece hashes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Sha1Hash(pub [u8; 20]);
 

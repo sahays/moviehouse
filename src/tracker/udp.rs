@@ -8,7 +8,7 @@ use tracing::debug;
 use super::http::{AnnounceResponse, TrackerError};
 use crate::torrent::types::{InfoHash, PeerId};
 
-const PROTOCOL_ID: u64 = 0x41727101980;
+const PROTOCOL_ID: u64 = 0x0417_2710_1980;
 const ACTION_CONNECT: u32 = 0;
 const ACTION_ANNOUNCE: u32 = 1;
 
@@ -104,11 +104,10 @@ async fn udp_connect(socket: &UdpSocket) -> Result<u64, TrackerError> {
 
                 return Ok(conn_id);
             }
-            Ok(Ok(_)) => continue,
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => return Err(TrackerError::Bencode(format!("recv failed: {e}"))),
             Err(_) => {
                 debug!(attempt, "UDP connect timeout, retrying");
-                continue;
             }
         }
     }
@@ -184,11 +183,10 @@ async fn udp_announce_request(
                     leechers: Some(leechers),
                 });
             }
-            Ok(Ok(_)) => continue,
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => return Err(TrackerError::Bencode(format!("recv failed: {e}"))),
             Err(_) => {
                 debug!(attempt, "UDP announce timeout, retrying");
-                continue;
             }
         }
     }

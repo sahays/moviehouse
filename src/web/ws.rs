@@ -46,7 +46,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     break;
                 }
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
             Err(_) => break,
         }
     }
