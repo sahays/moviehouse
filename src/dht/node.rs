@@ -23,7 +23,7 @@ const BOOTSTRAP_NODES: &[&str] = &[
 
 fn dht_cache_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".torrentclient/dht_nodes.json")
+    PathBuf::from(home).join(".moviehouse/dht_nodes.json")
 }
 
 /// Handle for interacting with the DHT from the download engine.

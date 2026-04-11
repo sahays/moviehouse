@@ -40,11 +40,11 @@ pub type InfoHash = Sha1Hash;
 pub struct PeerId(pub [u8; 20]);
 
 impl PeerId {
-    /// Generate a new random peer ID with Azureus-style prefix: -TC0001-
+    /// Generate a new random peer ID with Azureus-style prefix: -MH0100-
     pub fn generate() -> Self {
         use rand::Rng;
         let mut id = [0u8; 20];
-        id[..8].copy_from_slice(b"-TC0001-");
+        id[..8].copy_from_slice(b"-MH0100-");
         rand::thread_rng().fill(&mut id[8..]);
         Self(id)
     }

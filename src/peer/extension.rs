@@ -30,7 +30,7 @@ impl ExtendedHandshake {
         }
         Self {
             m,
-            v: Some("TorrentClient/0.1".to_string()),
+            v: Some("MovieHouse/1.0".to_string()),
             p: None,
             metadata_size,
             reqq: Some(250),

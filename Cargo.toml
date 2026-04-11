@@ -1,15 +1,15 @@
 [package]
-name = "torrentclient"
-version = "0.9.0"
+name = "moviehouse"
+version = "1.11.66"
 edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["codec"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 socket2 = "0.5"
 sha1 = "0.10"
 hex = "0.4"
@@ -28,3 +28,11 @@ lru = "0.12"
 data-encoding = "2"
 futures-util = { version = "0.3", features = ["sink"] }
 serde_json = "1"
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+rust-embed = "8"
+mime_guess = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+sled = "0.34"
+bincode = "1"
+dirs = "6"

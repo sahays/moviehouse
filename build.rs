@@ -1,6 +1,31 @@
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 fn main() {
+    // Build frontend if present
+    if Path::new("frontend/package.json").exists() {
+        println!("cargo:rerun-if-changed=frontend/src");
+        println!("cargo:rerun-if-changed=frontend/index.html");
+        println!("cargo:rerun-if-changed=frontend/package.json");
+
+        if !Path::new("frontend/node_modules").exists() {
+            let status = Command::new("npm")
+                .args(["install"])
+                .current_dir("frontend")
+                .status()
+                .expect("failed to run npm install");
+            assert!(status.success(), "npm install failed");
+        }
+
+        let status = Command::new("npm")
+            .args(["run", "build"])
+            .current_dir("frontend")
+            .status()
+            .expect("failed to run npm run build");
+        assert!(status.success(), "npm run build failed");
+    }
+
     // Read current version from Cargo.toml and bump the patch number
     let cargo_toml = fs::read_to_string("Cargo.toml").unwrap();
     let mut new_toml = String::new();

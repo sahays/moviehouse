@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "torrentclient")]
-#[command(version, about = "A high-performance BitTorrent client")]
+#[command(name = "moviehouse")]
+#[command(version, about = "Self-hosted media library and download manager")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -72,5 +72,16 @@ pub enum Commands {
     Info {
         /// Path to the .torrent file
         torrent_file: PathBuf,
+    },
+
+    /// Start the web UI server
+    Serve {
+        /// Address to bind the web server
+        #[arg(long, default_value = "127.0.0.1:3000")]
+        bind: String,
+
+        /// Open browser on start
+        #[arg(long)]
+        open: bool,
     },
 }

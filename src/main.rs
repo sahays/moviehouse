@@ -8,9 +8,15 @@ mod engine;
 mod error;
 mod peer;
 mod piece;
+mod tmdb;
 mod torrent;
 mod tracker;
+mod transcode;
 mod ui;
+mod web;
+
+use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
@@ -59,6 +65,10 @@ fn main() -> anyhow::Result<()> {
             let magnet = MagnetLink::parse(uri)?;
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(cmd_magnet(magnet, &cli, no_dht))?;
+        }
+        Commands::Serve { ref bind, open } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(cmd_serve(bind, open))?;
         }
     }
 
@@ -136,6 +146,65 @@ async fn cmd_magnet(magnet: MagnetLink, cli: &Cli, no_dht: bool) -> anyhow::Resu
     session.run().await
 }
 
+async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        cancel_clone.cancel();
+    });
+
+    let config = Config::load();
+    let store = Arc::new(engine::store::Store::open()?);
+    // Seed TMDB key from .env into settings if not already set
+    {
+        let mut settings = store.get_settings();
+        if settings.tmdb_api_key.is_empty() && !config.tmdb_api_key.is_empty() {
+            settings.tmdb_api_key = config.tmdb_api_key.clone();
+            let _ = store.put_settings(&settings);
+        }
+    }
+    eprintln!("Store opened");
+    let (transcode_handle, transcode_runner) = transcode::runner::create(store.clone());
+    tokio::spawn(transcode_runner.run());
+    eprintln!("Transcode runner spawned");
+    let manager = Arc::new(engine::manager::SessionManager::new(
+        cancel.clone(),
+        store.clone(),
+        Some(transcode_handle.clone()),
+    ));
+    let state = Arc::new(web::server::AppState {
+        manager,
+        store,
+        transcode: transcode_handle,
+    });
+    let router = web::server::create_router(state);
+
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    eprintln!("Web UI running at http://{bind}");
+
+    if open {
+        let url = format!("http://{bind}");
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            #[cfg(target_os = "macos")]
+            {
+                let _ = std::process::Command::new("open").arg(&url).spawn();
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+            }
+        });
+    }
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async move { cancel.cancelled().await })
+        .await?;
+
+    Ok(())
+}
+
 fn cmd_info(path: &std::path::Path) -> anyhow::Result<()> {
     let metainfo = Metainfo::from_file(path)?;
 
@@ -187,4 +256,31 @@ fn cmd_info(path: &std::path::Path) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// App configuration loaded from .env file.
+struct Config {
+    tmdb_api_key: String,
+    tmdb_read_access_token: String,
+}
+
+impl Config {
+    fn load() -> Self {
+        let mut values = std::collections::HashMap::new();
+        if let Ok(contents) = std::fs::read_to_string(".env") {
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    values.insert(key.trim().to_string(), value.trim().to_string());
+                }
+            }
+        }
+        Self {
+            tmdb_api_key: values.remove("TMDB_API_KEY").unwrap_or_default(),
+            tmdb_read_access_token: values.remove("TMDB_READ_ACCESS_TOKEN").unwrap_or_default(),
+        }
+    }
 }

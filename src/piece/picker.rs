@@ -307,6 +307,7 @@ impl PiecePicker {
 
     /// Called by session AFTER SHA1 verification succeeds and disk write completes.
     pub fn mark_verified(&mut self, piece_index: u32) {
+        self.in_progress.remove(&piece_index);
         self.have.set(piece_index as usize);
         self.verified_count += 1;
         if self.mode == PickerMode::RandomFirst && self.verified_count > 0 {
@@ -330,8 +331,14 @@ impl PiecePicker {
 
     fn check_mode(&mut self) {
         let remaining = self.num_pieces - self.have.count();
-        if remaining > 0 && self.in_progress.len() == remaining {
+        if self.mode != PickerMode::Endgame && remaining > 0 && self.in_progress.len() == remaining
+        {
             self.mode = PickerMode::Endgame;
+            eprintln!(
+                "ENDGAME: activated with {} pieces remaining, {} in_progress",
+                remaining,
+                self.in_progress.len()
+            );
         }
     }
 
@@ -341,6 +348,10 @@ impl PiecePicker {
 
     pub fn pieces_done(&self) -> usize {
         self.verified_count
+    }
+
+    pub fn pieces_total(&self) -> usize {
+        self.num_pieces
     }
 
     fn actual_piece_length(&self, piece_index: u32) -> u32 {

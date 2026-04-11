@@ -4,10 +4,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use indicatif::{ProgressBar, ProgressStyle};
-use tokio::sync::mpsc;
+use serde::Serialize;
+use std::sync::RwLock;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::dht::node::DhtHandle;
 use crate::disk::io::create_disk_manager;
@@ -24,6 +27,40 @@ use crate::tracker::manager::TrackerManager;
 
 use super::choker;
 
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub enum SessionState {
+    Downloading,
+    Completed,
+    Error(String),
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct SessionStatus {
+    pub id: Uuid,
+    pub name: String,
+    pub info_hash: String,
+    pub state: SessionState,
+    pub total_bytes: u64,
+    pub downloaded_bytes: u64,
+    pub pieces_done: usize,
+    pub pieces_total: usize,
+    pub peer_count: usize,
+    pub download_speed: f64,
+    pub progress: f64,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub uploaded_bytes: u64,
+}
+
+pub struct SessionHandle {
+    pub id: Uuid,
+    pub name: String,
+    pub status: Arc<RwLock<SessionStatus>>,
+    pub status_rx: watch::Receiver<SessionStatus>,
+    pub cancel: CancellationToken,
+}
+
 fn max_pipeline(lightspeed: bool, peer_throughput: f64) -> u32 {
     if !lightspeed {
         return 64;
@@ -34,6 +71,7 @@ fn max_pipeline(lightspeed: bool, peer_throughput: f64) -> u32 {
 }
 
 pub struct TorrentSession {
+    id: Uuid,
     metainfo: Arc<Metainfo>,
     our_peer_id: PeerId,
     port: u16,
@@ -43,6 +81,8 @@ pub struct TorrentSession {
     lightspeed: bool,
     cancel: CancellationToken,
     warm_peers: Vec<SocketAddr>,
+    status: Arc<RwLock<SessionStatus>>,
+    status_tx: watch::Sender<SessionStatus>,
 }
 
 impl TorrentSession {
@@ -58,7 +98,30 @@ impl TorrentSession {
         cancel: CancellationToken,
         warm_peers: Vec<SocketAddr>,
     ) -> Self {
+        let id = Uuid::new_v4();
+        let initial_status = SessionStatus {
+            id,
+            name: metainfo.info.name.clone(),
+            info_hash: metainfo.info_hash.to_string(),
+            state: SessionState::Downloading,
+            total_bytes: metainfo.info.total_length,
+            downloaded_bytes: 0,
+            pieces_done: 0,
+            pieces_total: metainfo.info.pieces.len(),
+            peer_count: 0,
+            download_speed: 0.0,
+            progress: 0.0,
+            started_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            completed_at: None,
+            uploaded_bytes: 0,
+        };
+        let (status_tx, _status_rx) = watch::channel(initial_status.clone());
+        let status = Arc::new(RwLock::new(initial_status));
         Self {
+            id,
             metainfo: Arc::new(metainfo),
             our_peer_id,
             port,
@@ -68,6 +131,18 @@ impl TorrentSession {
             lightspeed,
             cancel,
             warm_peers,
+            status,
+            status_tx,
+        }
+    }
+
+    pub fn handle(&self) -> SessionHandle {
+        SessionHandle {
+            id: self.id,
+            name: self.metainfo.info.name.clone(),
+            status: self.status.clone(),
+            status_rx: self.status_tx.subscribe(),
+            cancel: self.cancel.clone(),
         }
     }
 
@@ -204,6 +279,9 @@ impl TorrentSession {
 
         let lightspeed = self.lightspeed;
 
+        // Observable status for web UI
+        let mut local_status = self.status.read().unwrap().clone();
+
         // Main event loop
         loop {
             if picker.is_complete() {
@@ -234,6 +312,7 @@ impl TorrentSession {
                             peer_bitfields.insert(addr, Bitfield::new(num_pieces));
                             peer_pending.insert(addr, Vec::new());
                             progress.set_message(format!("{pc}"));
+                            local_status.peer_count = pc;
 
                             peer_manager.send_command(&addr, PeerCommand::SendInterested);
                             if let Some(s) = peer_manager.peer_state_mut(&addr) {
@@ -310,9 +389,35 @@ impl TorrentSession {
                             match result {
                                 BlockResult::Progress { new_bytes } => {
                                     bytes_new += new_bytes as u64;
+                                    // In endgame, cancel this block on other peers since we got it
+                                    if picker.is_endgame() {
+                                        for peer_addr in peer_manager.connected_peers() {
+                                            if peer_addr == addr { continue; }
+                                            peer_manager.send_command(&peer_addr, PeerCommand::CancelBlock {
+                                                index: piece_index,
+                                                begin: offset,
+                                                length: data.len() as u32,
+                                            });
+                                        }
+                                    }
                                 }
                                 BlockResult::PieceComplete(piece_data) => {
                                     bytes_new += data.len() as u64;
+                                    // Cancel all blocks for this piece on all other peers
+                                    if picker.is_endgame() {
+                                        for peer_addr in peer_manager.connected_peers() {
+                                            if peer_addr == addr { continue; }
+                                            if let Some(pending) = peer_pending.get(&peer_addr) {
+                                                for b in pending.iter().filter(|b| b.piece_index == piece_index) {
+                                                    peer_manager.send_command(&peer_addr, PeerCommand::CancelBlock {
+                                                        index: b.piece_index,
+                                                        begin: b.offset,
+                                                        length: b.length,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
                                     if piece_store.verify(piece_index, &piece_data) {
                                         // Mark verified in picker BEFORE writing (so is_complete is honest)
                                         picker.mark_verified(piece_index);
@@ -320,6 +425,11 @@ impl TorrentSession {
                                         let verified = picker.pieces_done();
                                         let bytes_verified = verified as u64 * info.piece_length as u64;
                                         progress.set_position(bytes_verified.min(info.total_length));
+
+                                        // Update observable status
+                                        local_status.downloaded_bytes = bytes_verified.min(info.total_length);
+                                        local_status.pieces_done = verified;
+                                        local_status.progress = local_status.downloaded_bytes as f64 / local_status.total_bytes as f64;
 
                                         // Write to disk (async, awaited before exit)
                                         let disk = disk_handle.clone();
@@ -340,16 +450,29 @@ impl TorrentSession {
                                         picker.piece_failed(piece_index);
                                     }
                                 }
-                                BlockResult::Duplicate => {}
+                                BlockResult::Duplicate => {
+                                    // In endgame, cancel this block on all other peers
+                                    if picker.is_endgame() {
+                                        for peer_addr in peer_manager.connected_peers() {
+                                            if peer_addr == addr { continue; }
+                                            peer_manager.send_command(&peer_addr, PeerCommand::CancelBlock {
+                                                index: piece_index,
+                                                begin: offset,
+                                                length: data.len() as u32,
+                                            });
+                                        }
+                                    }
+                                }
                             }
 
                             progress.set_message(format!("{}", peer_manager.peer_count()));
+                            local_status.peer_count = peer_manager.peer_count();
 
                             // Refill pipeline for this peer
                             fill_pipeline(&addr, &mut peer_manager, &peer_bitfields, &mut picker, &mut peer_pending, lightspeed);
 
                             // Endgame: duplicate requests across all unchoked peers
-                            if lightspeed && picker.is_endgame() {
+                            if picker.is_endgame() {
                                 let addrs: Vec<SocketAddr> = peer_manager.connected_peers();
                                 for peer_addr in addrs {
                                     if peer_manager.peer_state(&peer_addr).is_none_or(|s| s.peer_choking) {
@@ -378,6 +501,7 @@ impl TorrentSession {
                                 picker.peer_disconnected(&bf);
                             }
                             progress.set_message(format!("{}", peer_manager.peer_count()));
+                            local_status.peer_count = peer_manager.peer_count();
                             peer_manager.requeue_peer(addr);
                             // Freed blocks -> refill other peers' pipelines
                             refill_all_peers(&mut peer_manager, &peer_bitfields, &mut picker, &mut peer_pending, lightspeed);
@@ -396,6 +520,32 @@ impl TorrentSession {
 
                 _ = connect_interval.tick() => {
                     peer_manager.connect_pending();
+
+                    // Proactive endgame: every 2s, blast duplicate requests to all peers
+                    // This handles the case where remaining blocks are stuck on slow peers
+                    // and no new block receipts are triggering reactive endgame
+                    if picker.is_endgame() {
+                        let remaining = picker.pieces_total() - picker.pieces_done();
+                        eprintln!("ENDGAME TICK: {} pieces remaining, {} peers", remaining, peer_manager.peer_count());
+                        let addrs: Vec<SocketAddr> = peer_manager.connected_peers();
+                        for peer_addr in addrs {
+                            if peer_manager.peer_state(&peer_addr).is_none_or(|s| s.peer_choking) {
+                                continue;
+                            }
+                            if let Some(bf) = peer_bitfields.get(&peer_addr) {
+                                let blocks = picker.endgame_requests(bf);
+                                for block in blocks {
+                                    if !peer_manager.send_command(&peer_addr, PeerCommand::RequestBlock {
+                                        index: block.piece_index,
+                                        begin: block.offset,
+                                        length: block.length,
+                                    }) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 _ = speed_tick.tick() => {
@@ -408,7 +558,12 @@ impl TorrentSession {
                         if speed < min_speed { min_speed = speed; }
                         last_sample_time = now;
                         last_sample_bytes = bytes_new;
+                        local_status.download_speed = speed;
                     }
+
+                    // Flush observable status once per second
+                    *self.status.write().unwrap() = local_status.clone();
+                    let _ = self.status_tx.send(local_status.clone());
                 }
 
                 _ = choke_interval.tick() => {
@@ -423,6 +578,23 @@ impl TorrentSession {
         }
 
         progress.abandon();
+
+        // Set final observable state
+        if picker.is_complete() {
+            local_status.state = SessionState::Completed;
+            local_status.progress = 1.0;
+            local_status.downloaded_bytes = local_status.total_bytes;
+        } else {
+            local_status.state = SessionState::Cancelled;
+        }
+        local_status.completed_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        );
+        *self.status.write().unwrap() = local_status.clone();
+        let _ = self.status_tx.send(local_status);
 
         eprintln!("Flushing {} pending disk writes...", pending_writes.len());
         for handle in pending_writes {
