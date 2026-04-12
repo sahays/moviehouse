@@ -77,10 +77,7 @@ export interface AppSettings {
   media_scan_dir: string | null;
   auto_transcode: boolean;
   default_preset: string;
-  default_container: string;
-  enable_chunking: boolean;
   transcode_concurrency: number;
-  safari_mode: boolean;
 }
 
 export interface TranscodePreset {

@@ -138,11 +138,12 @@ impl Metainfo {
     /// Get all tracker URLs (from announce and announce-list), deduplicated.
     pub fn tracker_urls(&self) -> Vec<String> {
         let mut urls = Vec::new();
+        let mut seen = std::collections::HashSet::new();
 
         if let Some(ref announce_list) = self.announce_list {
             for tier in announce_list {
                 for url in tier {
-                    if !urls.contains(url) {
+                    if seen.insert(url.clone()) {
                         urls.push(url.clone());
                     }
                 }
@@ -150,7 +151,7 @@ impl Metainfo {
         }
 
         if let Some(ref announce) = self.announce
-            && !urls.contains(announce)
+            && seen.insert(announce.clone())
         {
             urls.insert(0, announce.clone());
         }

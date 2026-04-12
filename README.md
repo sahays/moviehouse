@@ -1,161 +1,140 @@
-# torrentclient
+# MovieHouse
 
-A high-performance BitTorrent client written in Rust, designed to saturate full network bandwidth.
+Self-hosted media library and download manager. Download movies and TV shows via BitTorrent, transcode for any device, browse with a web UI, and stream to your TV.
+
+Single binary. No cloud. Your media, your network.
 
 ## Features
 
-- **Core BitTorrent protocol (BEP3)** — peer wire protocol, piece exchange, SHA1 verification
-- **DHT (BEP5)** — distributed hash table for trackerless peer discovery
-- **Magnet links (BEP9/BEP10)** — download from magnet URIs via metadata exchange
-- **PEX (BEP11)** — peer exchange for continuous peer discovery
-- **HTTP & UDP trackers (BEP3/BEP15)** — multi-tracker support with automatic failover
-- **Rarest-first piece selection** with endgame mode for fast completion
-- **Per-block assignment tracking** — no duplicate downloads, instant recovery on peer choke/disconnect
-- **Adaptive request pipelining** — pipeline depth scales with per-peer throughput
-- **Multi-file torrent support** — handles torrents with any number of files
-- **Progress display** — real-time progress bar with speed, peer count, and ETA
-- **`--lightspeed` mode** — all performance optimizations enabled (see below)
+### Media Library
+- **TMDB integration** — poster art, cast, director, ratings, per-episode synopses
+- **TV show support** — seasons, episodes, grouped library with drill-down navigation
+- **Movies and shows** — separate sections, each with full metadata cards
+- **Folder scanning** — import existing media files with recursive directory search
+
+### Web UI
+- **React frontend** — embedded in the binary, no separate server
+- **Mobile-first** — bottom nav on mobile, persistent sidebar on desktop
+- **Light/dark mode** — toggle in sidebar, persists in localStorage
+- **shadcn/ui** — accessible components with Tailwind CSS
+- **Real-time updates** — WebSocket for download progress, 3-second polling for library
+
+### Transcoding
+- **HEVC MP4** (default) — remux MKV to MP4 with hvc1 tag, seconds, no quality loss
+- **H.264 MP4** (fallback) — re-encode for universal compatibility
+- **Concurrent runner** — configurable parallelism (default: 2 jobs)
+- **Batch transcode** — per-season "Transcode Season" button
+- **Stop/cancel** — per-job and per-season cancellation
+- **Progress persistence** — survives server restarts
+
+### Video Playback
+- **Click to play** — click poster to stream in browser
+- **HTTP range requests** — seeking, pause/resume
+- **Works everywhere** — Safari, Chrome (Mac/Android), Edge
+- **AirPlay** — stream to Apple TV from any Apple device
+
+### BitTorrent Engine
+- **DHT, magnet links, PEX** — full peer discovery
+- **Endgame mode** — fast completion of last pieces
+- **Lightspeed mode** — adaptive pipelining, persistent DHT, PEX
+- **Security hardened** — path traversal protection, bencode limits, input validation
+
+### Settings
+- **Persistent** — sled database with JSON serialization
+- **Download folder** — configurable with server-side folder browser
+- **Auto-transcode** — toggle + default encoding (HEVC/H.264)
+- **TMDB API key** — loaded from `.env` file
+
+## Quick Start
+
+```bash
+# Build and install
+cargo install --path .
+
+# Configure
+cp .env.example .env    # Add your TMDB API key
+
+# Run
+moviehouse serve --open
+
+# Network access (Apple TV, phones, tablets)
+moviehouse serve --bind 0.0.0.0:3000 --open
+```
+
+Or use the install script (builds, launches in background, opens browser):
+
+```bash
+./install.sh
+```
+
+## CLI Commands
+
+```bash
+# Web UI server
+moviehouse serve [--bind 0.0.0.0:3000] [--open]
+
+# Download from .torrent file
+moviehouse download ubuntu.torrent -o ~/Downloads [--lightspeed]
+
+# Download from magnet link
+moviehouse magnet "magnet:?xt=urn:btih:..." -o ~/Downloads
+
+# Inspect a .torrent file
+moviehouse info ubuntu.torrent
+```
 
 ## Requirements
 
-- Rust 1.85+ (uses edition 2024)
-- macOS, Linux, or Windows
+- **Rust** 2024 edition (build-time)
+- **Node.js** (build-time, for frontend compilation)
+- **FFmpeg** (optional, for transcoding)
+- **TMDB API key** (free, for movie/show metadata — [get one here](https://www.themoviedb.org/settings/api))
 
-## Build
+## Configuration
 
-```bash
-# Release build (recommended)
-cargo build --release
-
-# Install globally
-cargo install --path .
-```
-
-## Usage
-
-### Download from a .torrent file
-
-```bash
-torrentclient download ubuntu.torrent -o ~/Downloads
-```
-
-### Download from a magnet link
-
-```bash
-torrentclient magnet "magnet:?xt=urn:btih:..." -o ~/Downloads
-```
-
-### Inspect a .torrent file
-
-```bash
-torrentclient info ubuntu.torrent
-```
-
-### Lightspeed mode
-
-```bash
-torrentclient download file.torrent -o ~/Downloads --lightspeed
-torrentclient magnet "magnet:?xt=..." -o ~/Downloads --lightspeed
-```
-
-## Commands
-
-### `download`
+### `.env` file
 
 ```
-torrentclient download [OPTIONS] <TORRENT_FILE>
+TMDB_API_KEY=your_api_key_here
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `-o, --output <DIR>` | `.` | Output directory |
-| `-p, --port <PORT>` | `6881` | Listen port |
-| `--max-peers <N>` | `80` | Maximum peer connections |
-| `--max-download-rate <N>` | `0` | Max download rate bytes/sec (0 = unlimited) |
-| `--max-upload-rate <N>` | `0` | Max upload rate bytes/sec (0 = unlimited) |
-| `--no-dht` | | Disable DHT |
-| `--seed` | | Continue seeding after download |
-| `--lightspeed` | | Enable all performance optimizations |
-| `-v, --verbose` | | Increase log verbosity (-v, -vv, -vvv) |
-
-### `magnet`
+### Data locations
 
 ```
-torrentclient magnet [OPTIONS] <URI>
+~/.movies/data/         — sled database
+~/.movies/transcoded/   — transcoded media files
+~/.moviehouse/          — DHT routing table cache
 ```
-
-Same options as `download`. The magnet flow:
-1. Parse magnet URI for info_hash and trackers
-2. Find peers via DHT and trackers
-3. Download metadata from peers (BEP9)
-4. Verify metadata hash matches info_hash
-5. Start normal piece download
-
-### `info`
-
-```
-torrentclient info <TORRENT_FILE>
-```
-
-## Lightspeed Mode
-
-`--lightspeed` enables all performance optimizations:
-
-| Optimization | What it does |
-|---|---|
-| **PEX (Peer Exchange)** | Peers share their peer lists — continuous peer discovery beyond DHT |
-| **Persistent DHT** | Saves routing table to `~/.torrentclient/dht_nodes.json` — instant startup on next run |
-| **Adaptive pipeline** | Fast peers get up to 256 outstanding requests (baseline: 64) |
-| **Active endgame** | Last pieces are requested from all unchoked peers simultaneously |
-| **Batched disk sync** | Skips per-piece fsync, syncs on shutdown — reduces I/O overhead |
-| **Piece affinity** | Assigns peers to less-contended pieces to reduce duplicate work |
-| **Connection reuse** | Magnet downloads reuse peers from metadata phase |
-
-### Benchmarks (7.5 GiB file, ~37 peers)
-
-| Mode | Avg | Median | Peak | Time |
-|---|---|---|---|---|
-| Normal | 8.7 MiB/s | — | — | 14:45 |
-| Lightspeed | 9.6 MiB/s | 11.1 MiB/s | 18.2 MiB/s | 13:20 |
 
 ## Architecture
 
 ```
-                  CLI (clap)
-                     |
-              TorrentSession
-              /      |      \
-         Tracker    DHT    PeerManager -- 80 concurrent peers
-         (HTTP/UDP) (BEP5)      |
-              \      |      /   |
-               peer_tx channel  |
-                                |
-                          PiecePicker    DiskManager
-                        (rarest-first)  (async write)
+moviehouse serve
+├── axum web server (REST API + WebSocket + embedded React SPA)
+├── BitTorrent engine (DHT, trackers, peer wire protocol)
+├── Transcode runner (concurrent ffmpeg jobs)
+├── sled persistence (downloads, library, settings)
+└── TMDB client (movie/show metadata)
 ```
-
-- **No Mutex on hot path** — PiecePicker is accessed directly (single-task event loop)
-- **Per-block assignment** — `blocks_assigned` bitfield prevents duplicate requests, `unassign_block` on choke/disconnect for instant recovery
-- **Per-peer pipeline control** — outstanding request counter with backpressure from channel capacity
-- **Honest progress** — only counts verified pieces, not raw bytes
 
 ## Protocol Support
 
 | BEP | Name | Status |
-|---|---|---|
-| BEP3 | The BitTorrent Protocol | Implemented |
-| BEP5 | DHT Protocol | Implemented |
-| BEP6 | Fast Extension (HaveAll/HaveNone) | Implemented |
-| BEP9 | Extension for Peers to Send Metadata | Implemented |
-| BEP10 | Extension Protocol | Implemented |
-| BEP11 | Peer Exchange (PEX) | Implemented (lightspeed) |
-| BEP12 | Multitracker Metadata Extension | Implemented |
-| BEP15 | UDP Tracker Protocol | Implemented |
+|-----|------|--------|
+| 3 | BitTorrent Protocol | Implemented |
+| 5 | DHT Protocol | Implemented |
+| 6 | Fast Extension | Implemented |
+| 9 | Metadata Exchange | Implemented |
+| 10 | Extension Protocol | Implemented |
+| 11 | Peer Exchange (PEX) | Implemented |
+| 12 | Multi-tracker | Implemented |
+| 15 | UDP Tracker | Implemented |
 
 ## Tests
 
 ```bash
-cargo test
+cargo test          # 69 unit tests
+./pre-deploy.sh     # Rust fmt/clippy + React prettier/eslint
 ```
 
 ## License

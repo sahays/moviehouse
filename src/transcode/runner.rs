@@ -11,9 +11,8 @@ use uuid::Uuid;
 use crate::engine::store::Store;
 use crate::engine::types::TranscodeState;
 
-use super::chunked::run_chunked_ffmpeg;
-use super::ffmpeg::{run_ffmpeg_inner, run_remux};
-use super::probe::{can_remux, has_videotoolbox, probe_file};
+use super::ffmpeg::{run_ffmpeg_encode, run_remux};
+use super::probe::probe_file;
 
 static FFMPEG_AVAILABLE: OnceLock<bool> = OnceLock::new();
 static FFMPEG_VERSION: OnceLock<Option<String>> = OnceLock::new();
@@ -58,8 +57,6 @@ pub struct TranscodeJob {
     pub input_path: PathBuf,
     pub output_path: PathBuf,
     pub preset_name: String,
-    pub container: String,
-    pub enable_chunking: bool,
 }
 
 #[derive(Clone)]
@@ -196,28 +193,17 @@ impl TranscodeRunner {
                     let _ = store.put_media(&entry);
                 }
 
-                // Decide mode based on settings and source codecs
-                let settings = store.get_settings();
-                let is_quality = crate::transcode::presets::is_quality_preset(&job.preset_name);
-                let source_is_h264 = probe.as_ref().is_some_and(|p| p.video_codec == "h264");
+                // Simple decision: can we remux or must we re-encode?
                 let source_is_hevc = probe
                     .as_ref()
                     .is_some_and(|p| matches!(p.video_codec.as_str(), "hevc" | "h265"));
+                let source_is_h264 = probe.as_ref().is_some_and(|p| p.video_codec == "h264");
+                let can_remux = source_is_hevc || source_is_h264;
 
-                // Safari mode: HEVC sources can be remuxed to MP4+hvc1 (Safari plays HEVC natively)
-                // Non-Safari: HEVC must be re-encoded to H.264 for Chrome/Firefox
-                let remux = if settings.safari_mode && source_is_hevc {
-                    eprintln!("Mode: Safari (remux HEVC → MP4+hvc1, no re-encoding)");
-                    true
-                } else if (is_quality && source_is_h264) || probe.as_ref().is_some_and(can_remux) {
-                    eprintln!("Mode: Best Quality (remux, no re-encoding)");
-                    true
-                } else {
-                    eprintln!("Mode: Best Compatibility (H.264 re-encode)");
-                    false
-                };
+                // If user explicitly chose h264 preset, force re-encode even if remuxable
+                let force_h264 = job.preset_name == "h264";
 
-                // Update state to Transcoding (encoder set once encoding starts)
+                // Update state to Transcoding
                 let _ = store.update_transcode_state(
                     &job.media_id,
                     TranscodeState::Transcoding {
@@ -235,94 +221,32 @@ impl TranscodeRunner {
                 let cancel = CancellationToken::new();
                 cancel_tokens.insert(job.media_id, cancel.clone());
 
-                // Spawn ffmpeg -- remux or full transcode
+                let remux = can_remux && !force_h264;
+
                 let result = if remux {
+                    eprintln!("Mode: Remux (copy video to MP4)");
                     run_remux(
                         &job.input_path,
                         &job.output_path,
                         duration_secs,
                         &job.media_id,
                         &store,
-                        &job.container,
                         probe.as_ref(),
                         &cancel,
                     )
                     .await
                 } else {
-                    // Check if 10-bit (VideoToolbox can't handle it)
-                    let is_10bit = probe.as_ref().is_some_and(|p| p.pix_fmt.contains("10"));
-                    let try_hw = has_videotoolbox() && !is_10bit;
-
-                    // Try hardware encoding first
-                    let hw_result = if try_hw {
-                        run_ffmpeg_inner(
-                            &job.input_path,
-                            &job.output_path,
-                            duration_secs,
-                            &job.media_id,
-                            &store,
-                            &job.preset_name,
-                            &job.container,
-                            probe.as_ref(),
-                            &cancel,
-                            true,
-                        )
-                        .await
-                    } else {
-                        Err(anyhow::anyhow!(
-                            "hardware encoding not available for this input"
-                        ))
-                    };
-
-                    match hw_result {
-                        Ok(()) => Ok(()),
-                        Err(e) => {
-                            if cancel.is_cancelled() {
-                                Err(e)
-                            } else {
-                                if try_hw {
-                                    eprintln!(
-                                        "  Hardware encode failed: {e} — falling back to software"
-                                    );
-                                }
-                                let _ = std::fs::remove_file(&job.output_path);
-
-                                // Use chunked parallel encoding if enabled and duration is known
-                                let settings = store.get_settings();
-                                if settings.enable_chunking
-                                    && duration_secs > 30.0
-                                    && job.container == "mp4"
-                                {
-                                    eprintln!("  Using chunked parallel encoding");
-                                    run_chunked_ffmpeg(
-                                        &job.input_path,
-                                        &job.output_path,
-                                        duration_secs,
-                                        &job.media_id,
-                                        &store,
-                                        &job.preset_name,
-                                        probe.as_ref(),
-                                        &cancel,
-                                    )
-                                    .await
-                                } else {
-                                    run_ffmpeg_inner(
-                                        &job.input_path,
-                                        &job.output_path,
-                                        duration_secs,
-                                        &job.media_id,
-                                        &store,
-                                        &job.preset_name,
-                                        &job.container,
-                                        probe.as_ref(),
-                                        &cancel,
-                                        false,
-                                    )
-                                    .await
-                                }
-                            }
-                        }
-                    }
+                    eprintln!("Mode: Re-encode to H.264");
+                    run_ffmpeg_encode(
+                        &job.input_path,
+                        &job.output_path,
+                        duration_secs,
+                        &job.media_id,
+                        &store,
+                        probe.as_ref(),
+                        &cancel,
+                    )
+                    .await
                 };
 
                 // Remove cancellation token after job completes
@@ -331,19 +255,15 @@ impl TranscodeRunner {
                 match result {
                     Ok(()) => {
                         eprintln!("Transcode complete: {}", job.output_path.display());
-                        let final_output = if job.container == "hls" {
-                            job.output_path.with_extension("m3u8")
-                        } else {
-                            job.output_path
-                        };
                         let _ = store.update_transcode_state(
                             &job.media_id,
                             TranscodeState::Ready {
-                                output_path: final_output.clone(),
+                                output_path: job.output_path.clone(),
                             },
                         );
                         // Save this version and update codecs
-                        let _ = store.add_version(&job.media_id, &job.preset_name, &final_output);
+                        let _ =
+                            store.add_version(&job.media_id, &job.preset_name, &job.output_path);
                         if let Ok(Some(mut entry)) = store.get_media(&job.media_id) {
                             if !remux {
                                 entry.video_codec = Some("h264".into());
@@ -356,8 +276,6 @@ impl TranscodeRunner {
                         eprintln!("Transcode failed: {e}");
                         // Clean up partial output file
                         let _ = std::fs::remove_file(&job.output_path);
-                        // Also try HLS variant
-                        let _ = std::fs::remove_file(job.output_path.with_extension("m3u8"));
                         let _ = store.update_transcode_state(
                             &job.media_id,
                             TranscodeState::Failed {

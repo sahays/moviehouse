@@ -9,15 +9,11 @@ import {
   formatSpeed,
   formatTime,
   formatDuration,
+  formatElapsed,
 } from "@/lib/formatters";
 
 interface DownloadListProps {
   torrents: Map<string, SessionStatus>;
-}
-
-function formatElapsed(startedAt: number): string {
-  const now = Math.floor(Date.now() / 1000);
-  return formatDuration(now - startedAt);
 }
 
 function getStateLabel(state: SessionStatus["state"]): string {

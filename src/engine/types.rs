@@ -86,19 +86,8 @@ pub struct AppSettings {
     pub media_scan_dir: Option<PathBuf>,
     pub auto_transcode: bool,
     pub default_preset: String,
-    pub default_container: String,
     pub tmdb_api_key: String,
-    pub enable_chunking: bool,
     pub transcode_concurrency: usize,
-    pub safari_mode: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_concurrency() -> usize {
-    2
 }
 
 impl Default for AppSettings {
@@ -109,12 +98,9 @@ impl Default for AppSettings {
             download_dir: PathBuf::from("."),
             media_scan_dir: None,
             auto_transcode: true,
-            default_preset: "compat-1080p".into(),
-            default_container: "mp4".into(),
+            default_preset: "hevc".into(),
             tmdb_api_key: String::new(),
-            enable_chunking: true,
             transcode_concurrency: 2,
-            safari_mode: true,
         }
     }
 }

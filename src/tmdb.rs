@@ -271,6 +271,23 @@ pub async fn fetch_season_episodes(
     Some(episodes)
 }
 
+/// Apply TMDB metadata to a `MediaEntry`.
+/// Writes poster, overview, rating, cast, director, `tmdb_id`, and conditionally title/year.
+pub fn apply_metadata(entry: &mut crate::engine::types::MediaEntry, meta: &MovieMetadata) {
+    if let Some(ref title) = meta.title {
+        title.clone_into(&mut entry.title);
+    }
+    entry.poster_url.clone_from(&meta.poster_url);
+    entry.overview.clone_from(&meta.overview);
+    entry.rating = meta.rating;
+    entry.cast.clone_from(&meta.cast);
+    entry.director.clone_from(&meta.director);
+    entry.tmdb_id = Some(meta.tmdb_id);
+    if meta.year.is_some() && entry.year.is_none() {
+        entry.year = meta.year;
+    }
+}
+
 fn urlencoding(s: &str) -> String {
     s.chars()
         .map(|c| {

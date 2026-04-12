@@ -22,84 +22,82 @@ pub struct AppState {
 }
 
 pub fn create_router(state: &Arc<AppState>) -> Router {
+    use super::api::{filesystem, library, media, settings, torrents, transcode};
+
     let api = Router::new()
         .route(
             "/api/v1/torrents",
-            axum::routing::get(super::api::list_torrents).post(super::api::add_torrent),
+            axum::routing::get(torrents::list_torrents).post(torrents::add_torrent),
         )
         .route(
             "/api/v1/torrents/{id}",
-            axum::routing::get(super::api::get_torrent).delete(super::api::delete_torrent),
+            axum::routing::get(torrents::get_torrent).delete(torrents::delete_torrent),
         )
         .route("/api/v1/ws", axum::routing::get(super::ws::ws_handler))
-        .route(
-            "/api/v1/library",
-            axum::routing::get(super::api::list_library),
-        )
+        .route("/api/v1/library", axum::routing::get(library::list_library))
         .route(
             "/api/v1/library/{id}",
-            axum::routing::get(super::api::get_library_item)
-                .delete(super::api::delete_library_item),
+            axum::routing::get(library::get_library_item).delete(library::delete_library_item),
         )
         .route(
             "/api/v1/library/{id}/refresh",
-            axum::routing::post(super::api::refresh_metadata),
+            axum::routing::post(library::refresh_metadata),
         )
         .route(
             "/api/v1/media/{id}/stream",
-            axum::routing::get(super::api::stream_media),
+            axum::routing::get(media::stream_media),
         )
         .route(
             "/api/v1/media/{id}/segment/{filename}",
-            axum::routing::get(super::api::stream_segment),
+            axum::routing::get(media::stream_segment),
         )
         .route(
             "/api/v1/system/status",
-            axum::routing::get(super::api::system_status),
+            axum::routing::get(settings::system_status),
         )
         .route(
             "/api/v1/settings",
-            axum::routing::get(super::api::get_settings).put(super::api::put_settings),
+            axum::routing::get(settings::get_settings).put(settings::put_settings),
         )
         .route(
             "/api/v1/transcode/presets",
-            axum::routing::get(super::api::list_presets),
+            axum::routing::get(settings::list_presets),
         )
         .route(
             "/api/v1/library/{id}/transcode",
-            axum::routing::post(super::api::manual_transcode),
+            axum::routing::post(transcode::manual_transcode),
         )
         .route(
             "/api/v1/library/{id}/cancel-transcode",
-            axum::routing::post(super::api::cancel_transcode),
+            axum::routing::post(transcode::cancel_transcode),
         )
         .route(
             "/api/v1/library/scan",
-            axum::routing::post(super::api::scan_folder),
+            axum::routing::post(library::scan_folder),
         )
         .route(
             "/api/v1/filesystem/browse",
-            axum::routing::get(super::api::browse_filesystem),
+            axum::routing::get(filesystem::browse_filesystem),
         )
         .route(
             "/api/v1/metadata/search",
-            axum::routing::get(super::api::search_metadata),
+            axum::routing::get(filesystem::search_metadata),
         )
         .route(
             "/api/v1/library/groups",
-            axum::routing::get(super::api::list_groups),
+            axum::routing::get(library::list_groups),
         )
         .route(
             "/api/v1/library/groups/{id}/transcode-all",
-            axum::routing::post(super::api::transcode_all),
+            axum::routing::post(transcode::transcode_all),
         )
         .route(
             "/api/v1/library/groups/{id}/stop-all",
-            axum::routing::post(super::api::stop_group_transcode),
+            axum::routing::post(transcode::stop_group_transcode),
         )
         .route(
             "/api/v1/library/groups/{id}/refresh-metadata",
-            axum::routing::post(super::api::refresh_group_metadata),
+            axum::routing::post(library::refresh_group_metadata),
         )
         .with_state(state.clone());
 

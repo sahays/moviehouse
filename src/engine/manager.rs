@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -226,31 +225,8 @@ impl SessionManager {
                             )
                             && let Some(ref tc) = transcode_for_hook
                         {
-                            let output_dir = dirs::home_dir()
-                                .unwrap_or_else(|| PathBuf::from("."))
-                                .join(".movies")
-                                .join("transcoded");
-                            let sanitized = crate::engine::library::sanitize_filename(&title);
-                            let ep_suffix = match (episode_info.season, episode_info.episode) {
-                                (Some(s), Some(e)) => format!("-s{s:02}e{e:02}"),
-                                _ => String::new(),
-                            };
-                            let ext = if settings.default_container == "hls" {
-                                "m3u8"
-                            } else {
-                                "mp4"
-                            };
-                            let output_path =
-                                output_dir.join(format!("{sanitized}{ep_suffix}.{ext}"));
-
-                            let job = crate::transcode::runner::TranscodeJob {
-                                media_id,
-                                input_path: video_file.clone(),
-                                output_path,
-                                preset_name: settings.default_preset.clone(),
-                                container: settings.default_container.clone(),
-                                enable_chunking: settings.enable_chunking,
-                            };
+                            let job =
+                                crate::transcode::job::create_job(&entry, &settings.default_preset);
                             let tc = tc.clone();
                             tokio::spawn(async move {
                                 tc.submit(job).await;
@@ -307,19 +283,10 @@ impl SessionManager {
                                 // Apply metadata to all entries in the group
                                 for mid in &media_ids {
                                     if let Ok(Some(mut entry)) = store_for_tmdb.get_media(mid) {
-                                        if let Some(ref title) = meta.title
-                                            && !is_show
-                                        {
-                                            title.clone_into(&mut entry.title);
-                                        }
-                                        entry.poster_url.clone_from(&meta.poster_url);
-                                        entry.overview.clone_from(&meta.overview);
-                                        entry.rating = meta.rating;
-                                        entry.cast.clone_from(&meta.cast);
-                                        entry.director.clone_from(&meta.director);
-                                        entry.tmdb_id = Some(meta.tmdb_id);
-                                        if meta.year.is_some() && entry.year.is_none() {
-                                            entry.year = meta.year;
+                                        let saved_title = entry.title.clone();
+                                        crate::tmdb::apply_metadata(&mut entry, &meta);
+                                        if is_show {
+                                            entry.title = saved_title;
                                         }
                                         let _ = store_for_tmdb.put_media(&entry);
                                     }

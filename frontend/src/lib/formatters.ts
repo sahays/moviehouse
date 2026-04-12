@@ -27,3 +27,8 @@ export function formatSpeed(mibPerSec: number): string {
   if (mibPerSec < 1) return `${(mibPerSec * 1024).toFixed(0)} KB/s`;
   return `${mibPerSec.toFixed(1)} MB/s`;
 }
+
+export function formatElapsed(startedAt: number): string {
+  const now = Math.floor(Date.now() / 1000);
+  return formatDuration(now - startedAt);
+}
