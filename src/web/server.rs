@@ -40,6 +40,10 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             axum::routing::get(library::get_library_item).delete(library::delete_library_item),
         )
         .route(
+            "/api/v1/library/cleanup",
+            axum::routing::post(library::cleanup_sources),
+        )
+        .route(
             "/api/v1/library/{id}/refresh",
             axum::routing::post(library::refresh_metadata),
         )

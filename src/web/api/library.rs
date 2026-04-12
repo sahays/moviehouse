@@ -53,6 +53,72 @@ pub async fn delete_library_item(
     StatusCode::NO_CONTENT
 }
 
+/// Delete original source files for entries that have been transcoded.
+/// Only deletes source files where a transcoded version (Ready state) exists.
+pub async fn cleanup_sources(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let entries = state.store.list_media().unwrap_or_default();
+    let mut deleted_count = 0u32;
+    let mut freed_bytes = 0u64;
+    let mut errors = 0u32;
+
+    for entry in &entries {
+        // Only clean up entries that have been transcoded (Ready state or have versions)
+        let has_transcode = matches!(
+            entry.transcode_state,
+            crate::engine::types::TranscodeState::Ready { .. }
+        ) || !entry.versions.is_empty();
+
+        if !has_transcode {
+            continue;
+        }
+
+        // Don't delete if source = transcoded path (same file)
+        if let Some(ref tp) = entry.transcoded_path
+            && *tp == entry.media_file
+        {
+            continue;
+        }
+
+        let source = &entry.media_file;
+        if source.exists() {
+            let size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
+            match std::fs::remove_file(source) {
+                Ok(()) => {
+                    deleted_count += 1;
+                    freed_bytes += size;
+                    eprintln!("Cleanup: deleted {}", source.display());
+                }
+                Err(e) => {
+                    eprintln!("Cleanup: failed to delete {}: {e}", source.display());
+                    errors += 1;
+                }
+            }
+        }
+    }
+
+    // Also try to clean empty parent directories
+    let mut cleaned_dirs = std::collections::HashSet::new();
+    for entry in &entries {
+        if let Some(parent) = entry.media_file.parent()
+            && cleaned_dirs.insert(parent.to_path_buf())
+            && parent.exists()
+        {
+            // Remove dir only if empty
+            let _ = std::fs::remove_dir(parent); // fails silently if not empty
+        }
+    }
+
+    let freed_mb = freed_bytes as f64 / (1024.0 * 1024.0);
+    eprintln!("Cleanup: deleted {deleted_count} files, freed {freed_mb:.1} MB, {errors} errors");
+
+    Json(serde_json::json!({
+        "deleted": deleted_count,
+        "freed_bytes": freed_bytes,
+        "freed_mb": format!("{freed_mb:.1}"),
+        "errors": errors,
+    }))
+}
+
 pub async fn list_groups(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let entries = state.store.list_media().unwrap_or_default();
 
