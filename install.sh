@@ -22,7 +22,7 @@ fi
 
 # Start in background
 echo "Starting moviehouse serve..."
-nohup "$BINARY" serve --bind "$BIND" > "$LOG_FILE" 2>&1 &
+nohup "$BINARY" serve --bind "$BIND" -v > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 echo "PID: $(cat "$PID_FILE")"
 

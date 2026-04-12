@@ -44,6 +44,25 @@ export interface MediaEntry {
   video_codec: string | null;
   audio_codec: string | null;
   versions: Record<string, string>;
+  show_name: string | null;
+  season: number | null;
+  episode: number | null;
+  episode_title: string | null;
+  group_id: string | null;
+  tmdb_id: number | null;
+}
+
+export interface MediaGroup {
+  group_id: string | null;
+  show_name: string | null;
+  title: string;
+  poster_url: string | null;
+  overview: string | null;
+  rating: number | null;
+  is_show: boolean;
+  episode_count: number;
+  season_count: number;
+  entries: MediaEntry[];
 }
 
 export interface SystemStatus {
@@ -60,6 +79,8 @@ export interface AppSettings {
   default_preset: string;
   default_container: string;
   enable_chunking: boolean;
+  transcode_concurrency: number;
+  safari_mode: boolean;
 }
 
 export interface TranscodePreset {

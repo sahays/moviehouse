@@ -73,10 +73,15 @@ function getStateBadgeClasses(state: TranscodeState): string {
   return `${base} bg-gray-500/15 text-gray-400`;
 }
 
-export function MediaCard({ entry, isPlaying, onPlay, onDelete }: MediaCardProps) {
+export function MediaCard({
+  entry,
+  isPlaying,
+  onPlay,
+  onDelete,
+}: MediaCardProps) {
   const [showTranscode, setShowTranscode] = useState(false);
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
-  const settings = useSettings();
+  const { settings } = useSettings();
   const autoTranscode = settings?.auto_transcode ?? true;
 
   const playable = isPlayable(entry);
@@ -98,7 +103,9 @@ export function MediaCard({ entry, isPlaying, onPlay, onDelete }: MediaCardProps
   }, [transcoding]);
 
   return (
-    <div className={`bg-[var(--color-bg-secondary)] border rounded-lg overflow-hidden transition-colors flex ${isPlaying ? "border-blue-500 ring-1 ring-blue-500/30" : "border-[var(--color-border)] hover:border-[var(--color-border-hover)]"}`}>
+    <div
+      className={`bg-[var(--color-bg-secondary)] border rounded-lg overflow-hidden transition-colors flex ${isPlaying ? "border-blue-500 ring-1 ring-blue-500/30" : "border-[var(--color-border)] hover:border-[var(--color-border-hover)]"}`}
+    >
       {/* Poster — 2:3 aspect ratio, left side */}
       <div
         role={playable ? "button" : undefined}
@@ -130,7 +137,9 @@ export function MediaCard({ entry, isPlaying, onPlay, onDelete }: MediaCardProps
               <span className="w-1 h-4 bg-blue-400 rounded-full animate-pulse [animation-delay:150ms]" />
               <span className="w-1 h-3 bg-blue-400 rounded-full animate-pulse [animation-delay:300ms]" />
             </div>
-            <span className="text-xs font-medium text-blue-300">Now Playing</span>
+            <span className="text-xs font-medium text-blue-300">
+              Now Playing
+            </span>
           </div>
         ) : playable ? (
           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
@@ -147,7 +156,12 @@ export function MediaCard({ entry, isPlaying, onPlay, onDelete }: MediaCardProps
         {/* Header: title + context menu */}
         <div className="flex items-start justify-between gap-1">
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)] leading-tight line-clamp-2">
-            {entry.title}
+            {entry.episode != null && (
+              <span className="text-[var(--color-text-tertiary)] mr-1">
+                E{String(entry.episode).padStart(2, "0")}
+              </span>
+            )}
+            {entry.episode_title ?? entry.title}
           </h3>
           <DropdownMenu>
             <DropdownMenuTrigger className="shrink-0 p-1 rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
@@ -329,14 +343,16 @@ export function MediaCard({ entry, isPlaying, onPlay, onDelete }: MediaCardProps
           </>
         )}
 
-        {entry.transcode_state === "Pending" && !autoTranscode && (
-          <TranscodeOptions
-            mediaId={entry.id}
-            videoCodec={entry.video_codec}
-            onStarted={() => {}}
-          />
-        )}
-        {showTranscode && (
+        {entry.transcode_state === "Pending" &&
+          !autoTranscode &&
+          !entry.group_id && (
+            <TranscodeOptions
+              mediaId={entry.id}
+              videoCodec={entry.video_codec}
+              onStarted={() => {}}
+            />
+          )}
+        {showTranscode && !entry.group_id && (
           <TranscodeOptions
             mediaId={entry.id}
             videoCodec={entry.video_codec}

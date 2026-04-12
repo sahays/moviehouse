@@ -205,6 +205,13 @@ pub async fn run_remux(
     // Copy video stream
     args.extend(["-c:v".into(), "copy".into()]);
 
+    // Add hvc1 tag for HEVC in MP4 (required by Safari for native HEVC playback)
+    let is_hevc = probe.is_some_and(|p| matches!(p.video_codec.as_str(), "hevc" | "h265"));
+    if is_hevc && container != "hls" {
+        eprintln!("  Remux: adding hvc1 tag for Safari HEVC playback");
+        args.extend(["-tag:v".into(), "hvc1".into()]);
+    }
+
     // Always re-encode audio to AAC for universal browser playback
     let audio_is_aac = probe.is_some_and(|p| p.audio_codec == "aac");
     if audio_is_aac {

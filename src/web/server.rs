@@ -85,6 +85,22 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             "/api/v1/metadata/search",
             axum::routing::get(super::api::search_metadata),
         )
+        .route(
+            "/api/v1/library/groups",
+            axum::routing::get(super::api::list_groups),
+        )
+        .route(
+            "/api/v1/library/groups/{id}/transcode-all",
+            axum::routing::post(super::api::transcode_all),
+        )
+        .route(
+            "/api/v1/library/groups/{id}/stop-all",
+            axum::routing::post(super::api::stop_group_transcode),
+        )
+        .route(
+            "/api/v1/library/groups/{id}/refresh-metadata",
+            axum::routing::post(super::api::refresh_group_metadata),
+        )
         .with_state(state.clone());
 
     Router::new().merge(api).fallback(static_handler).layer(

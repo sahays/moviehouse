@@ -61,11 +61,24 @@ pub struct MediaEntry {
     /// Multiple transcoded versions: `preset_name` -> file path
     #[serde(default)]
     pub versions: std::collections::HashMap<String, PathBuf>,
+    #[serde(default)]
+    pub show_name: Option<String>,
+    #[serde(default)]
+    pub season: Option<u16>,
+    #[serde(default)]
+    pub episode: Option<u16>,
+    #[serde(default)]
+    pub episode_title: Option<String>,
+    #[serde(default)]
+    pub group_id: Option<Uuid>,
+    #[serde(default)]
+    pub tmdb_id: Option<u64>,
 }
 
 // ── From store.rs ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub lightspeed: bool,
     pub max_download_speed: u64,
@@ -75,12 +88,17 @@ pub struct AppSettings {
     pub default_preset: String,
     pub default_container: String,
     pub tmdb_api_key: String,
-    #[serde(default = "default_true")]
     pub enable_chunking: bool,
+    pub transcode_concurrency: usize,
+    pub safari_mode: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_concurrency() -> usize {
+    2
 }
 
 impl Default for AppSettings {
@@ -95,6 +113,8 @@ impl Default for AppSettings {
             default_container: "mp4".into(),
             tmdb_api_key: String::new(),
             enable_chunking: true,
+            transcode_concurrency: 2,
+            safari_mode: true,
         }
     }
 }

@@ -141,214 +141,234 @@ impl TranscodeRunner {
         if ffmpeg_available() {
             eprintln!("Transcode runner ready (ffmpeg available)");
         } else {
-            eprintln!(
-                "FFmpeg not found. Transcoding disabled. Install: https://ffmpeg.org/download.html"
-            );
+            eprintln!("FFmpeg not found. Transcoding disabled.");
         }
 
+        let concurrency = self.store.get_settings().transcode_concurrency.max(1);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        eprintln!("Transcode concurrency: {concurrency} parallel jobs");
+
         while let Some(job) = self.job_rx.recv().await {
-            if !ffmpeg_available() {
-                eprintln!(
-                    "Transcode skipped (no ffmpeg): {}",
-                    job.input_path.display()
-                );
-                let _ = self
-                    .store
-                    .update_transcode_state(&job.media_id, TranscodeState::Unavailable);
+            let Ok(permit) = semaphore.clone().acquire_owned().await else {
                 continue;
-            }
+            };
 
-            eprintln!(
-                "Transcode starting: {} -> {}",
-                job.input_path.display(),
-                job.output_path.display()
-            );
+            let store = self.store.clone();
+            let cancel_tokens = self.cancel_tokens.clone();
 
-            // Probe the input file
-            let probe = probe_file(&job.input_path).await;
-            let duration_secs = probe.as_ref().map_or(0.0, |p| p.duration_secs);
+            tokio::spawn(async move {
+                if !ffmpeg_available() {
+                    eprintln!(
+                        "Transcode skipped (no ffmpeg): {}",
+                        job.input_path.display()
+                    );
+                    let _ =
+                        store.update_transcode_state(&job.media_id, TranscodeState::Unavailable);
+                    drop(permit);
+                    return;
+                }
 
-            if let Some(ref p) = probe {
                 eprintln!(
-                    "Probe: video={} audio={} pix_fmt={} duration={:.0}s",
-                    p.video_codec, p.audio_codec, p.pix_fmt, p.duration_secs
+                    "Transcode starting: {} -> {}",
+                    job.input_path.display(),
+                    job.output_path.display()
                 );
-            } else {
-                eprintln!("Probe: failed to read streams");
-            }
 
-            // Store detected codecs on the media entry
-            if let Some(ref p) = probe
-                && let Ok(Some(mut entry)) = self.store.get_media(&job.media_id)
-            {
-                entry.video_codec = Some(p.video_codec.clone());
-                entry.audio_codec = Some(p.audio_codec.clone());
-                let _ = self.store.put_media(&entry);
-            }
+                // Probe the input file
+                let probe = probe_file(&job.input_path).await;
+                let duration_secs = probe.as_ref().map_or(0.0, |p| p.duration_secs);
 
-            // Decide mode: remux only if source is H.264 (browser-safe)
-            // HEVC sources always need re-encode for universal browser playback
-            let is_quality = crate::transcode::presets::is_quality_preset(&job.preset_name);
-            let source_is_h264 = probe.as_ref().is_some_and(|p| p.video_codec == "h264");
-            let remux = (is_quality && source_is_h264) || probe.as_ref().is_some_and(can_remux);
+                if let Some(ref p) = probe {
+                    eprintln!(
+                        "Probe: video={} audio={} pix_fmt={} duration={:.0}s",
+                        p.video_codec, p.audio_codec, p.pix_fmt, p.duration_secs
+                    );
+                } else {
+                    eprintln!("Probe: failed to read streams");
+                }
 
-            if remux {
-                eprintln!("Mode: Best Quality (remux, no re-encoding)");
-            } else {
-                eprintln!("Mode: Best Compatibility (H.264 re-encode)");
-            }
+                // Store detected codecs on the media entry
+                if let Some(ref p) = probe
+                    && let Ok(Some(mut entry)) = store.get_media(&job.media_id)
+                {
+                    entry.video_codec = Some(p.video_codec.clone());
+                    entry.audio_codec = Some(p.audio_codec.clone());
+                    let _ = store.put_media(&entry);
+                }
 
-            // Update state to Transcoding (encoder set once encoding starts)
-            let _ = self.store.update_transcode_state(
-                &job.media_id,
-                TranscodeState::Transcoding {
-                    progress_percent: 0.0,
-                    encoder: String::new(),
-                },
-            );
+                // Decide mode based on settings and source codecs
+                let settings = store.get_settings();
+                let is_quality = crate::transcode::presets::is_quality_preset(&job.preset_name);
+                let source_is_h264 = probe.as_ref().is_some_and(|p| p.video_codec == "h264");
+                let source_is_hevc = probe
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.video_codec.as_str(), "hevc" | "h265"));
 
-            // Create output directory
-            if let Some(parent) = job.output_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
+                // Safari mode: HEVC sources can be remuxed to MP4+hvc1 (Safari plays HEVC natively)
+                // Non-Safari: HEVC must be re-encoded to H.264 for Chrome/Firefox
+                let remux = if settings.safari_mode && source_is_hevc {
+                    eprintln!("Mode: Safari (remux HEVC → MP4+hvc1, no re-encoding)");
+                    true
+                } else if (is_quality && source_is_h264) || probe.as_ref().is_some_and(can_remux) {
+                    eprintln!("Mode: Best Quality (remux, no re-encoding)");
+                    true
+                } else {
+                    eprintln!("Mode: Best Compatibility (H.264 re-encode)");
+                    false
+                };
 
-            // Create cancellation token for this job
-            let cancel = CancellationToken::new();
-            self.cancel_tokens.insert(job.media_id, cancel.clone());
-
-            // Spawn ffmpeg -- remux or full transcode
-            let result = if remux {
-                run_remux(
-                    &job.input_path,
-                    &job.output_path,
-                    duration_secs,
+                // Update state to Transcoding (encoder set once encoding starts)
+                let _ = store.update_transcode_state(
                     &job.media_id,
-                    &self.store,
-                    &job.container,
-                    probe.as_ref(),
-                    &cancel,
-                )
-                .await
-            } else {
-                // Check if 10-bit (VideoToolbox can't handle it)
-                let is_10bit = probe.as_ref().is_some_and(|p| p.pix_fmt.contains("10"));
-                let try_hw = has_videotoolbox() && !is_10bit;
+                    TranscodeState::Transcoding {
+                        progress_percent: 0.0,
+                        encoder: String::new(),
+                    },
+                );
 
-                // Try hardware encoding first
-                let hw_result = if try_hw {
-                    run_ffmpeg_inner(
+                // Create output directory
+                if let Some(parent) = job.output_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+
+                // Create cancellation token for this job
+                let cancel = CancellationToken::new();
+                cancel_tokens.insert(job.media_id, cancel.clone());
+
+                // Spawn ffmpeg -- remux or full transcode
+                let result = if remux {
+                    run_remux(
                         &job.input_path,
                         &job.output_path,
                         duration_secs,
                         &job.media_id,
-                        &self.store,
-                        &job.preset_name,
+                        &store,
                         &job.container,
                         probe.as_ref(),
                         &cancel,
-                        true,
                     )
                     .await
                 } else {
-                    Err(anyhow::anyhow!(
-                        "hardware encoding not available for this input"
-                    ))
+                    // Check if 10-bit (VideoToolbox can't handle it)
+                    let is_10bit = probe.as_ref().is_some_and(|p| p.pix_fmt.contains("10"));
+                    let try_hw = has_videotoolbox() && !is_10bit;
+
+                    // Try hardware encoding first
+                    let hw_result = if try_hw {
+                        run_ffmpeg_inner(
+                            &job.input_path,
+                            &job.output_path,
+                            duration_secs,
+                            &job.media_id,
+                            &store,
+                            &job.preset_name,
+                            &job.container,
+                            probe.as_ref(),
+                            &cancel,
+                            true,
+                        )
+                        .await
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "hardware encoding not available for this input"
+                        ))
+                    };
+
+                    match hw_result {
+                        Ok(()) => Ok(()),
+                        Err(e) => {
+                            if cancel.is_cancelled() {
+                                Err(e)
+                            } else {
+                                if try_hw {
+                                    eprintln!(
+                                        "  Hardware encode failed: {e} — falling back to software"
+                                    );
+                                }
+                                let _ = std::fs::remove_file(&job.output_path);
+
+                                // Use chunked parallel encoding if enabled and duration is known
+                                let settings = store.get_settings();
+                                if settings.enable_chunking
+                                    && duration_secs > 30.0
+                                    && job.container == "mp4"
+                                {
+                                    eprintln!("  Using chunked parallel encoding");
+                                    run_chunked_ffmpeg(
+                                        &job.input_path,
+                                        &job.output_path,
+                                        duration_secs,
+                                        &job.media_id,
+                                        &store,
+                                        &job.preset_name,
+                                        probe.as_ref(),
+                                        &cancel,
+                                    )
+                                    .await
+                                } else {
+                                    run_ffmpeg_inner(
+                                        &job.input_path,
+                                        &job.output_path,
+                                        duration_secs,
+                                        &job.media_id,
+                                        &store,
+                                        &job.preset_name,
+                                        &job.container,
+                                        probe.as_ref(),
+                                        &cancel,
+                                        false,
+                                    )
+                                    .await
+                                }
+                            }
+                        }
+                    }
                 };
 
-                match hw_result {
-                    Ok(()) => Ok(()),
-                    Err(e) => {
-                        if cancel.is_cancelled() {
-                            Err(e)
+                // Remove cancellation token after job completes
+                cancel_tokens.remove(&job.media_id);
+
+                match result {
+                    Ok(()) => {
+                        eprintln!("Transcode complete: {}", job.output_path.display());
+                        let final_output = if job.container == "hls" {
+                            job.output_path.with_extension("m3u8")
                         } else {
-                            if try_hw {
-                                eprintln!(
-                                    "  Hardware encode failed: {e} — falling back to software"
-                                );
+                            job.output_path
+                        };
+                        let _ = store.update_transcode_state(
+                            &job.media_id,
+                            TranscodeState::Ready {
+                                output_path: final_output.clone(),
+                            },
+                        );
+                        // Save this version and update codecs
+                        let _ = store.add_version(&job.media_id, &job.preset_name, &final_output);
+                        if let Ok(Some(mut entry)) = store.get_media(&job.media_id) {
+                            if !remux {
+                                entry.video_codec = Some("h264".into());
                             }
-                            let _ = std::fs::remove_file(&job.output_path);
-
-                            // Use chunked parallel encoding if enabled and duration is known
-                            let settings = self.store.get_settings();
-                            if settings.enable_chunking
-                                && duration_secs > 30.0
-                                && job.container == "mp4"
-                            {
-                                eprintln!("  Using chunked parallel encoding");
-                                run_chunked_ffmpeg(
-                                    &job.input_path,
-                                    &job.output_path,
-                                    duration_secs,
-                                    &job.media_id,
-                                    &self.store,
-                                    &job.preset_name,
-                                    probe.as_ref(),
-                                    &cancel,
-                                )
-                                .await
-                            } else {
-                                run_ffmpeg_inner(
-                                    &job.input_path,
-                                    &job.output_path,
-                                    duration_secs,
-                                    &job.media_id,
-                                    &self.store,
-                                    &job.preset_name,
-                                    &job.container,
-                                    probe.as_ref(),
-                                    &cancel,
-                                    false,
-                                )
-                                .await
-                            }
+                            entry.audio_codec = Some("aac".into());
+                            let _ = store.put_media(&entry);
                         }
                     }
-                }
-            };
-
-            // Remove cancellation token after job completes
-            self.cancel_tokens.remove(&job.media_id);
-
-            match result {
-                Ok(()) => {
-                    eprintln!("Transcode complete: {}", job.output_path.display());
-                    let final_output = if job.container == "hls" {
-                        job.output_path.with_extension("m3u8")
-                    } else {
-                        job.output_path
-                    };
-                    let _ = self.store.update_transcode_state(
-                        &job.media_id,
-                        TranscodeState::Ready {
-                            output_path: final_output.clone(),
-                        },
-                    );
-                    // Save this version and update codecs
-                    let _ = self
-                        .store
-                        .add_version(&job.media_id, &job.preset_name, &final_output);
-                    if let Ok(Some(mut entry)) = self.store.get_media(&job.media_id) {
-                        if !remux {
-                            entry.video_codec = Some("h264".into());
-                        }
-                        entry.audio_codec = Some("aac".into());
-                        let _ = self.store.put_media(&entry);
+                    Err(e) => {
+                        eprintln!("Transcode failed: {e}");
+                        // Clean up partial output file
+                        let _ = std::fs::remove_file(&job.output_path);
+                        // Also try HLS variant
+                        let _ = std::fs::remove_file(job.output_path.with_extension("m3u8"));
+                        let _ = store.update_transcode_state(
+                            &job.media_id,
+                            TranscodeState::Failed {
+                                error: e.to_string(),
+                            },
+                        );
                     }
                 }
-                Err(e) => {
-                    eprintln!("Transcode failed: {e}");
-                    // Clean up partial output file
-                    let _ = std::fs::remove_file(&job.output_path);
-                    // Also try HLS variant
-                    let _ = std::fs::remove_file(job.output_path.with_extension("m3u8"));
-                    let _ = self.store.update_transcode_state(
-                        &job.media_id,
-                        TranscodeState::Failed {
-                            error: e.to_string(),
-                        },
-                    );
-                }
-            }
+
+                drop(permit); // Release semaphore when done
+            });
         }
     }
 }

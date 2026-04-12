@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FolderPicker } from "./FolderPicker";
+import { useSettings } from "@/contexts/SettingsContext";
 import type { AppSettings, SystemStatus } from "../types";
 
 interface SettingsPanelProps {
@@ -12,6 +13,7 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
+  const { updateSettings: updateContext } = useSettings();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [scanPath, setScanPath] = useState("");
@@ -47,6 +49,7 @@ export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
       setSettings((prev) => {
         if (!prev) return prev;
         const next = { ...prev, [key]: value };
+        updateContext(next); // Sync to shared context immediately
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => {
           fetch("/api/v1/settings", {
@@ -58,7 +61,7 @@ export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
         return next;
       });
     },
-    [],
+    [updateContext],
   );
 
   const handleScan = async () => {
@@ -230,12 +233,13 @@ export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
         <div className="flex gap-1">
           {["4k", "1080p", "720p", "480p"].map((res) => {
             const presetName = `compat-${res}`;
+            const isSelected =
+              settings.default_preset === presetName ||
+              settings.default_preset === res;
             return (
               <Button
                 key={res}
-                variant={
-                  settings.default_preset === presetName ? "default" : "outline"
-                }
+                variant={isSelected ? "default" : "outline"}
                 size="sm"
                 className="flex-1 text-xs"
                 onClick={() => updateSetting("default_preset", presetName)}
@@ -261,6 +265,22 @@ export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
           onCheckedChange={(val: boolean) =>
             updateSetting("enable_chunking", val)
           }
+        />
+      </div>
+
+      <div className="flex items-center justify-between py-3">
+        <div>
+          <Label className="text-sm text-[var(--color-text-secondary)]">
+            Safari mode
+          </Label>
+          <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
+            Keep H.265/HEVC — fast remux instead of re-encoding. Safari and
+            Apple devices only.
+          </p>
+        </div>
+        <Switch
+          checked={settings.safari_mode}
+          onCheckedChange={(val: boolean) => updateSetting("safari_mode", val)}
         />
       </div>
 

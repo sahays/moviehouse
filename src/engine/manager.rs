@@ -142,12 +142,30 @@ impl SessionManager {
                 {
                     let download_dir = record.output_dir.join(&record.name);
                     let video_files = crate::engine::library::detect_video_files(&download_dir);
-                    if let Some(video_file) = video_files.first() {
-                        let (title, year) = crate::engine::library::parse_media_title(&record.name);
-                        let is_web = crate::engine::library::is_web_compatible(video_file);
-                        let settings = store.get_settings();
+                    let group_id = if video_files.len() > 1 {
+                        Some(Uuid::new_v4())
+                    } else {
+                        None
+                    };
+                    let settings = store.get_settings();
 
-                        let media_id = Uuid::new_v4();
+                    let mut media_ids: Vec<Uuid> = Vec::new();
+
+                    for video_file in &video_files {
+                        let filename = video_file
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&record.name);
+                        let episode_info = crate::engine::library::parse_episode_info(filename);
+                        let (title, year) = crate::engine::library::parse_media_title(filename);
+                        let is_web = crate::engine::library::is_web_compatible(video_file);
+
+                        let media_type = if episode_info.is_show {
+                            crate::engine::library::MediaType::Show
+                        } else {
+                            crate::engine::library::MediaType::Unknown
+                        };
+
                         let transcode_state = if is_web {
                             crate::engine::library::TranscodeState::Skipped
                         } else if crate::transcode::runner::ffmpeg_available() {
@@ -156,11 +174,16 @@ impl SessionManager {
                             crate::engine::library::TranscodeState::Unavailable
                         };
 
+                        let media_id = Uuid::new_v4();
                         let entry = crate::engine::library::MediaEntry {
                             id: media_id,
-                            title: title.clone(),
+                            title: if episode_info.is_show {
+                                episode_info.show_name.clone()
+                            } else {
+                                title.clone()
+                            },
                             year,
-                            media_type: crate::engine::library::MediaType::Unknown,
+                            media_type,
                             original_path: download_dir.clone(),
                             media_file: video_file.clone(),
                             transcoded_path: None,
@@ -180,50 +203,25 @@ impl SessionManager {
                             video_codec: None,
                             audio_codec: None,
                             versions: std::collections::HashMap::new(),
+                            show_name: if episode_info.is_show {
+                                Some(episode_info.show_name.clone())
+                            } else {
+                                None
+                            },
+                            season: episode_info.season,
+                            episode: episode_info.episode,
+                            episode_title: episode_info.episode_title,
+                            group_id,
+                            tmdb_id: None,
                         };
 
                         let _ = store.put_media(&entry);
-                        eprintln!(
-                            "Library: added \"{}\" (state: {:?})",
-                            entry.title, entry.transcode_state
-                        );
-
-                        // Fetch metadata from TMDB
-                        let store_for_tmdb = store.clone();
-                        let entry_id = entry.id;
-                        let entry_title = entry.title.clone();
-                        let entry_year = entry.year;
-                        tokio::spawn(async move {
-                            let settings = store_for_tmdb.get_settings();
-                            if !settings.tmdb_api_key.is_empty()
-                                && let Some(meta) = crate::tmdb::fetch_metadata(
-                                    &settings.tmdb_api_key,
-                                    &entry_title,
-                                    entry_year,
-                                )
-                                .await
-                                && let Ok(Some(mut entry)) = store_for_tmdb.get_media(&entry_id)
-                            {
-                                if let Some(ref title) = meta.title {
-                                    title.clone_into(&mut entry.title);
-                                }
-                                entry.poster_url = meta.poster_url;
-                                entry.overview = meta.overview;
-                                entry.rating = meta.rating;
-                                entry.cast = meta.cast;
-                                entry.director = meta.director;
-                                if meta.year.is_some() && entry.year.is_none() {
-                                    entry.year = meta.year;
-                                }
-                                let _ = store_for_tmdb.put_media(&entry);
-                                eprintln!("TMDB: fetched metadata for \"{}\"", entry.title);
-                            }
-                        });
+                        media_ids.push(media_id);
 
                         // Submit transcode job if auto_transcode is enabled
                         if settings.auto_transcode
                             && matches!(
-                                entry.transcode_state,
+                                transcode_state,
                                 crate::engine::library::TranscodeState::Pending
                             )
                             && let Some(ref tc) = transcode_for_hook
@@ -233,12 +231,17 @@ impl SessionManager {
                                 .join(".movies")
                                 .join("transcoded");
                             let sanitized = crate::engine::library::sanitize_filename(&title);
+                            let ep_suffix = match (episode_info.season, episode_info.episode) {
+                                (Some(s), Some(e)) => format!("-s{s:02}e{e:02}"),
+                                _ => String::new(),
+                            };
                             let ext = if settings.default_container == "hls" {
                                 "m3u8"
                             } else {
                                 "mp4"
                             };
-                            let output_path = output_dir.join(format!("{sanitized}.{ext}"));
+                            let output_path =
+                                output_dir.join(format!("{sanitized}{ep_suffix}.{ext}"));
 
                             let job = crate::transcode::runner::TranscodeJob {
                                 media_id,
@@ -253,6 +256,79 @@ impl SessionManager {
                                 tc.submit(job).await;
                             });
                         }
+                    }
+
+                    // Log what we indexed
+                    if video_files.len() > 1 {
+                        eprintln!(
+                            "Library: added {} files from \"{}\"",
+                            video_files.len(),
+                            record.name
+                        );
+                    } else if video_files.len() == 1 {
+                        eprintln!("Library: added \"{}\"", record.name);
+                    }
+
+                    // TMDB fetch: once per group, applied to all entries
+                    if !video_files.is_empty() {
+                        let first_file = video_files[0]
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&record.name);
+                        let ep_info = crate::engine::library::parse_episode_info(first_file);
+                        let (parsed_title, parsed_year) =
+                            crate::engine::library::parse_media_title(first_file);
+                        let search_title = if ep_info.is_show {
+                            ep_info.show_name
+                        } else {
+                            parsed_title
+                        };
+                        let is_show = ep_info.is_show;
+                        let search_year = parsed_year;
+
+                        let store_for_tmdb = store.clone();
+                        let _ = group_id;
+                        tokio::spawn(async move {
+                            let settings = store_for_tmdb.get_settings();
+                            if settings.tmdb_api_key.is_empty() {
+                                return;
+                            }
+                            eprintln!(
+                                "TMDB: searching for \"{search_title}\" (year: {search_year:?}, is_show: {is_show})"
+                            );
+                            let meta = crate::tmdb::fetch_metadata_auto(
+                                &settings.tmdb_api_key,
+                                &search_title,
+                                search_year,
+                                is_show,
+                            )
+                            .await;
+                            if let Some(meta) = meta {
+                                // Apply metadata to all entries in the group
+                                for mid in &media_ids {
+                                    if let Ok(Some(mut entry)) = store_for_tmdb.get_media(mid) {
+                                        if let Some(ref title) = meta.title
+                                            && !is_show
+                                        {
+                                            title.clone_into(&mut entry.title);
+                                        }
+                                        entry.poster_url.clone_from(&meta.poster_url);
+                                        entry.overview.clone_from(&meta.overview);
+                                        entry.rating = meta.rating;
+                                        entry.cast.clone_from(&meta.cast);
+                                        entry.director.clone_from(&meta.director);
+                                        entry.tmdb_id = Some(meta.tmdb_id);
+                                        if meta.year.is_some() && entry.year.is_none() {
+                                            entry.year = meta.year;
+                                        }
+                                        let _ = store_for_tmdb.put_media(&entry);
+                                    }
+                                }
+                                eprintln!("TMDB: fetched metadata for \"{search_title}\"");
+                            } else {
+                                eprintln!("TMDB: no results for \"{search_title}\"");
+                            }
+                        });
                     }
                 }
             }

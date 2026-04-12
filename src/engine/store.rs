@@ -141,6 +141,16 @@ impl Store {
         Ok(())
     }
 
+    /// List all media entries belonging to a specific group.
+    pub fn list_media_by_group(&self, group_id: &Uuid) -> anyhow::Result<Vec<MediaEntry>> {
+        self.list_media().map(|entries| {
+            entries
+                .into_iter()
+                .filter(|e| e.group_id.as_ref() == Some(group_id))
+                .collect()
+        })
+    }
+
     /// State machine for transcode transitions.
     /// Valid transitions:
     ///   Pending      → Transcoding(0%)   [start]

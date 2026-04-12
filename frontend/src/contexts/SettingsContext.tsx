@@ -1,7 +1,21 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 import type { AppSettings } from "../types";
 
-const SettingsContext = createContext<AppSettings | null>(null);
+interface SettingsContextValue {
+  settings: AppSettings | null;
+  updateSettings: (updated: AppSettings) => void;
+}
+
+const SettingsContext = createContext<SettingsContextValue>({
+  settings: null,
+  updateSettings: () => {},
+});
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -15,14 +29,18 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {});
   }, []);
 
+  const updateSettings = useCallback((updated: AppSettings) => {
+    setSettings(updated);
+  }, []);
+
   return (
-    <SettingsContext.Provider value={settings}>
+    <SettingsContext.Provider value={{ settings, updateSettings }}>
       {children}
     </SettingsContext.Provider>
   );
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- hook must co-locate with its context
-export function useSettings(): AppSettings | null {
+export function useSettings(): SettingsContextValue {
   return useContext(SettingsContext);
 }
