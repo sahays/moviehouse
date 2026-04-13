@@ -13,6 +13,13 @@ use super::session::{SessionState, SessionStatus, TorrentSession};
 use super::store::{DownloadRecord, Store};
 pub use super::types::{DownloadOptions, SessionEvent, SessionHandle};
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 pub struct SessionManager {
     sessions: Arc<DashMap<Uuid, SessionHandle>>,
     event_tx: broadcast::Sender<SessionEvent>,
@@ -343,6 +350,96 @@ impl SessionManager {
         }
         if let Err(e) = self.store.remove_download(id) {
             tracing::error!(error = %e, "Failed to remove download from store");
+        }
+    }
+
+    /// Register a magnet link as a visible "Resolving" placeholder in the download list.
+    /// Returns the UUID that the UI can track.
+    pub fn register_magnet(&self, name: String, info_hash: String) -> Uuid {
+        let id = Uuid::new_v4();
+        let status = SessionStatus {
+            id,
+            name: name.clone(),
+            info_hash: info_hash.clone(),
+            state: SessionState::Resolving,
+            total_bytes: 0,
+            downloaded_bytes: 0,
+            pieces_done: 0,
+            pieces_total: 0,
+            peer_count: 0,
+            download_speed: 0.0,
+            progress: 0.0,
+            started_at: now_secs(),
+            completed_at: None,
+            uploaded_bytes: 0,
+        };
+
+        let (_tx, rx) = tokio::sync::watch::channel(status.clone());
+        let handle = SessionHandle {
+            id,
+            name,
+            status: Arc::new(std::sync::RwLock::new(status.clone())),
+            status_rx: rx,
+            cancel: self.cancel.child_token(),
+        };
+
+        // Persist so it survives restarts
+        let record = DownloadRecord {
+            id,
+            name: handle.name.clone(),
+            info_hash,
+            total_bytes: 0,
+            pieces_total: 0,
+            metainfo_bytes: vec![],
+            output_dir: std::path::PathBuf::from("."),
+            lightspeed: false,
+            completed_pieces: vec![],
+            status: status.clone(),
+        };
+        let _ = self.store.put_download(&record);
+
+        // Broadcast to WebSocket
+        let _ = self.event_tx.send(SessionEvent {
+            id,
+            status: status.clone(),
+        });
+
+        self.sessions.insert(id, handle);
+        id
+    }
+
+    /// Metadata resolved: remove placeholder, start real download with same ID visible.
+    /// The old placeholder is removed and `add_torrent` creates a new session entry.
+    pub async fn resolve_magnet(
+        &self,
+        placeholder_id: Uuid,
+        metainfo: Metainfo,
+        metainfo_bytes: Vec<u8>,
+        opts: DownloadOptions,
+    ) -> Uuid {
+        // Remove the placeholder session
+        self.sessions.remove(&placeholder_id);
+        let _ = self.store.remove_download(&placeholder_id);
+
+        // Start real download (gets a new ID, shows up in UI immediately)
+        self.add_torrent(metainfo, metainfo_bytes, opts).await
+    }
+
+    /// Metadata resolution failed: update placeholder to Error state.
+    #[allow(clippy::unwrap_used)]
+    pub fn fail_magnet(&self, id: &Uuid, error: String) {
+        if let Some(handle) = self.sessions.get(id) {
+            let mut status = handle.status.write().unwrap();
+            status.state = SessionState::Error(error);
+            let _ = self.event_tx.send(SessionEvent {
+                id: *id,
+                status: status.clone(),
+            });
+            // Persist the error state
+            if let Ok(Some(mut record)) = self.store.get_download(id) {
+                record.status = status.clone();
+                let _ = self.store.put_download(&record);
+            }
         }
     }
 

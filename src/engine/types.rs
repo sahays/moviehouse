@@ -128,6 +128,7 @@ pub struct DownloadRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SessionState {
+    Resolving,
     Downloading,
     Completed,
     Error(String),

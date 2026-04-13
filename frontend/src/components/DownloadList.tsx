@@ -17,13 +17,17 @@ interface DownloadListProps {
 }
 
 function getStateLabel(state: SessionStatus["state"]): string {
-  if (typeof state === "string") return state;
+  if (typeof state === "string") {
+    if (state === "Resolving") return "Resolving magnet...";
+    return state;
+  }
   if (state && typeof state === "object" && "Error" in state) return "Error";
   return "Unknown";
 }
 
 function getStateBadgeClasses(state: SessionStatus["state"]): string {
   const base = "px-2 py-0.5 rounded text-xs font-medium";
+  if (state === "Resolving") return `${base} bg-amber-500/15 text-amber-400`;
   if (state === "Downloading") return `${base} bg-blue-500/15 text-blue-400`;
   if (state === "Completed")
     return `${base} bg-emerald-500/15 text-emerald-400`;
@@ -263,9 +267,10 @@ export function DownloadList({ torrents }: DownloadListProps) {
       Array.from(torrents.values()).sort((a, b) => {
         // Active downloads first, then completed, then rest
         const order: Record<string, number> = {
-          Downloading: 0,
-          Completed: 1,
-          Cancelled: 2,
+          Resolving: 0,
+          Downloading: 1,
+          Completed: 2,
+          Cancelled: 3,
         };
         const aOrder = typeof a.state === "string" ? (order[a.state] ?? 3) : 3;
         const bOrder = typeof b.state === "string" ? (order[b.state] ?? 3) : 3;

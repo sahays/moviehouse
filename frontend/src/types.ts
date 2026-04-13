@@ -2,7 +2,12 @@ export interface SessionStatus {
   id: string;
   name: string;
   info_hash: string;
-  state: "Downloading" | "Completed" | "Cancelled" | { Error: string };
+  state:
+    | "Resolving"
+    | "Downloading"
+    | "Completed"
+    | "Cancelled"
+    | { Error: string };
   total_bytes: number;
   downloaded_bytes: number;
   pieces_done: number;

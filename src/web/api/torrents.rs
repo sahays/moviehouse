@@ -132,17 +132,25 @@ pub async fn add_torrent(
                 }
             };
 
+            let opts = default_opts(&state.store);
+            let display_name = magnet
+                .display_name
+                .clone()
+                .unwrap_or_else(|| "Unknown magnet".into());
+            let info_hash_hex = hex::encode(magnet.info_hash.0);
+
+            // Register placeholder so the UI can see it immediately
+            let placeholder_id = state
+                .manager
+                .register_magnet(display_name.clone(), info_hash_hex);
+
             // Spawn magnet download: phase 1 (metadata) then phase 2 (pieces)
             let manager = state.manager.clone();
-            let opts = default_opts(&state.store);
             let cancel = tokio_util::sync::CancellationToken::new();
             let our_peer_id = crate::torrent::types::PeerId::generate();
 
             tokio::spawn(async move {
-                eprintln!(
-                    "Magnet: resolving metadata for {}",
-                    magnet.display_name.as_deref().unwrap_or("?")
-                );
+                eprintln!("Magnet: resolving metadata for {display_name}");
 
                 // Phase 1: download metadata from peers
                 let result = crate::engine::magnet::download_metadata(
@@ -165,18 +173,21 @@ pub async fn add_torrent(
                         );
                         let metainfo_bytes = crate::bencode::encode::encode(
                             &crate::bencode::value::BValue::Bytes(vec![]),
-                        ); // placeholder — magnet doesn't have raw bytes
-                        manager.add_torrent(metainfo, metainfo_bytes, opts).await;
+                        );
+                        manager
+                            .resolve_magnet(placeholder_id, metainfo, metainfo_bytes, opts)
+                            .await;
                     }
                     Err(e) => {
                         eprintln!("Magnet: metadata resolution failed: {e}");
+                        manager.fail_magnet(&placeholder_id, e.to_string());
                     }
                 }
             });
 
             return (
                 StatusCode::ACCEPTED,
-                Json(serde_json::json!({ "status": "resolving magnet" })),
+                Json(serde_json::json!({ "id": placeholder_id, "status": "resolving magnet" })),
             )
                 .into_response();
         }

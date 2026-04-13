@@ -95,10 +95,10 @@ function App() {
                   <LibraryView library={library} onRefresh={refreshLibrary} />
                 )}
                 {view === "downloads" && (
-                  <>
+                  <div className="flex flex-col gap-6">
                     <AddTorrent onAdded={addTorrent} />
                     <DownloadList torrents={torrents} />
-                  </>
+                  </div>
                 )}
                 {view === "settings" && (
                   <SettingsPanel onScanComplete={refreshLibrary} />
