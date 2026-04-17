@@ -1,6 +1,6 @@
 import { Play } from "lucide-react";
 import type { MediaEntry } from "../types";
-import { formatBytes } from "@/lib/formatters";
+import { formatBytes, formatPlaybackTime } from "@/lib/formatters";
 
 interface EpisodeRowProps {
   entry: MediaEntry;
@@ -74,6 +74,17 @@ export function EpisodeRow({ entry, isPlaying, onPlay }: EpisodeRowProps) {
           {progress > 0 ? `${progress.toFixed(0)}%` : "..."}
         </span>
       )}
+
+      {/* Play progress */}
+      {!transcoding &&
+        entry.play_position != null &&
+        entry.duration != null &&
+        entry.duration > 0 && (
+          <span className="text-xs text-[var(--color-text-tertiary)] shrink-0">
+            {formatPlaybackTime(entry.play_position)} /{" "}
+            {formatPlaybackTime(entry.duration)}
+          </span>
+        )}
 
       {/* Size */}
       <span className="text-xs text-[var(--color-text-tertiary)] shrink-0">

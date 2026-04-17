@@ -66,9 +66,13 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(cmd_magnet(magnet, &cli, no_dht))?;
         }
-        Commands::Serve { ref bind, open } => {
+        Commands::Serve {
+            ref bind,
+            open,
+            allow_sleep,
+        } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(cmd_serve(bind, open))?;
+            rt.block_on(cmd_serve(bind, open, allow_sleep))?;
         }
     }
 
@@ -146,13 +150,33 @@ async fn cmd_magnet(magnet: MagnetLink, cli: &Cli, no_dht: bool) -> anyhow::Resu
     session.run().await
 }
 
-async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
+async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         cancel_clone.cancel();
     });
+
+    // Prevent macOS from sleeping while the server is running
+    #[cfg(target_os = "macos")]
+    let _caffeinate = if !allow_sleep {
+        match std::process::Command::new("caffeinate")
+            .args(["-i", "-w", &std::process::id().to_string()])
+            .spawn()
+        {
+            Ok(child) => {
+                eprintln!("Sleep prevention active (caffeinate pid {})", child.id());
+                Some(child)
+            }
+            Err(e) => {
+                eprintln!("Warning: could not prevent sleep: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let config = Config::load();
     let store = Arc::new(engine::store::Store::open()?);

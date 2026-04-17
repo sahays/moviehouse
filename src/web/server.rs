@@ -56,6 +56,19 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             axum::routing::get(media::stream_segment),
         )
         .route(
+            "/api/v1/media/{id}/subtitles",
+            axum::routing::get(media::list_subtitles)
+                .post(media::upload_subtitle),
+        )
+        .route(
+            "/api/v1/media/{id}/subtitles/{index}",
+            axum::routing::get(media::stream_subtitle),
+        )
+        .route(
+            "/api/v1/media/{id}/progress",
+            axum::routing::put(media::update_progress),
+        )
+        .route(
             "/api/v1/system/status",
             axum::routing::get(settings::system_status),
         )

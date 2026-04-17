@@ -1,10 +1,12 @@
-import { Clapperboard, Users, FileText } from "lucide-react";
+import { useRef, useState } from "react";
+import { Clapperboard, Users, FileText, Subtitles, Upload } from "lucide-react";
 import type { MediaEntry, TranscodeState } from "../../types";
 import { formatBytes } from "@/lib/formatters";
 import {
   getStateLabel,
   getStateBadgeClasses,
   isActivelyTranscoding,
+  isPlayable,
 } from "@/lib/media-helpers";
 
 interface MediaCardInfoProps {
@@ -14,6 +16,27 @@ interface MediaCardInfoProps {
 export function MediaCardInfo({ entry }: MediaCardInfoProps) {
   const transcoding = isActivelyTranscoding(entry.transcode_state);
   const stateLabel = getStateLabel(entry.transcode_state);
+  const playable = isPlayable(entry);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      await fetch(`/api/v1/media/${entry.id}/subtitles`, {
+        method: "POST",
+        body: form,
+      });
+    } catch {
+      // ignore
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
   return (
     <>
@@ -70,6 +93,34 @@ export function MediaCardInfo({ entry }: MediaCardInfoProps) {
               Direct Play
             </span>
           )}
+        {entry.subtitles.length > 0 ? (
+          <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-500/15 text-purple-400">
+            <Subtitles size={10} />
+            {entry.subtitles.length} sub{entry.subtitles.length > 1 ? "s" : ""}
+          </span>
+        ) : playable ? (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".srt,.vtt,.ass,.ssa"
+              className="hidden"
+              onChange={handleUpload}
+            />
+            <button
+              type="button"
+              className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
+              }}
+              disabled={uploading}
+            >
+              <Upload size={10} />
+              {uploading ? "Uploading..." : "Add subs"}
+            </button>
+          </>
+        ) : null}
         {entry.video_codec && (
           <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-tertiary)]">
             {entry.video_codec === "hevc" || entry.video_codec === "h265"

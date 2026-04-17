@@ -520,6 +520,10 @@ pub async fn scan_folder(
             episode_title: episode_info.episode_title.clone(),
             group_id,
             tmdb_id: None,
+            subtitles: crate::engine::library::detect_subtitle_files(video_file),
+            last_played_at: None,
+            play_position: None,
+            duration: None,
         };
 
         let _ = state.store.put_media(&entry);

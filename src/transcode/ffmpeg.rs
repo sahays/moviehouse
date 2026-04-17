@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::engine::store::Store;
 use crate::engine::types::TranscodeState;
 
-use super::probe::{ProbeResult, cpu_count};
+use super::probe::{ProbeResult, SubtitleStream, cpu_count};
 
 /// Re-encode to H.264 MP4 with progress reporting.
 #[allow(clippy::too_many_lines)]
@@ -192,4 +192,62 @@ pub async fn run_remux(
     }
 
     Ok(())
+}
+
+/// Extract embedded subtitle streams from a video file as standalone .vtt files.
+/// Returns the paths and metadata of extracted subtitle files.
+pub async fn extract_subtitles(
+    input: &std::path::Path,
+    output_dir: &std::path::Path,
+    output_stem: &str,
+    subtitle_streams: &[SubtitleStream],
+) -> Vec<crate::engine::types::SubtitleTrack> {
+    let mut tracks = Vec::new();
+
+    for (i, stream) in subtitle_streams.iter().enumerate() {
+        let fallback = format!("track{i}");
+        let lang_suffix = stream.language.as_deref().unwrap_or(&fallback);
+        let vtt_path = output_dir.join(format!("{output_stem}.{lang_suffix}.vtt"));
+
+        let result = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-i",
+                &input.to_string_lossy(),
+                "-map",
+                &format!("0:{}", stream.index),
+                "-c:s",
+                "webvtt",
+                "-y",
+            ])
+            .arg(&vtt_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        if result.is_ok_and(|s| s.success()) && vtt_path.exists() {
+            let language = stream.language.as_deref().and_then(|l| {
+                crate::engine::library::normalize_language_code(l)
+            });
+            let label = language
+                .as_deref()
+                .map(crate::engine::library::language_code_to_label)
+                .unwrap_or_else(|| {
+                    stream.language.clone().unwrap_or_else(|| format!("Track {}", i + 1))
+                });
+            tracks.push(crate::engine::types::SubtitleTrack {
+                label,
+                language,
+                path: vtt_path,
+                format: "vtt".into(),
+            });
+            eprintln!(
+                "  Extracted subtitle: {} (stream {})",
+                tracks.last().unwrap().label,
+                stream.index
+            );
+        }
+    }
+
+    tracks
 }

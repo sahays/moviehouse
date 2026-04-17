@@ -77,11 +77,15 @@ pub enum Commands {
     /// Start the web UI server
     Serve {
         /// Address to bind the web server
-        #[arg(long, default_value = "127.0.0.1:3000")]
+        #[arg(long, default_value = "127.0.0.1:9000")]
         bind: String,
 
         /// Open browser on start
         #[arg(long)]
         open: bool,
+
+        /// Allow system to sleep while serving (by default, idle sleep is prevented)
+        #[arg(long)]
+        allow_sleep: bool,
     },
 }

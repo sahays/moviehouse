@@ -255,6 +255,172 @@ fn find_nxnn(s: &str) -> Option<(usize, u16, u16)> {
     None
 }
 
+/// Detect subtitle files alongside a video file.
+/// Checks the same directory and common subdirectories (Subs/, Subtitles/).
+/// Matches subtitles whose filename starts with the video's stem.
+pub fn detect_subtitle_files(video_path: &std::path::Path) -> Vec<super::types::SubtitleTrack> {
+    let subtitle_extensions = ["srt", "vtt", "ass", "ssa"];
+    let Some(parent) = video_path.parent() else {
+        return Vec::new();
+    };
+    let video_stem = video_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let mut tracks = Vec::new();
+
+    // Directories to search: same dir, Subs/, Subtitles/
+    let mut dirs_to_search = vec![parent.to_path_buf()];
+    for sub in &["Subs", "Subtitles", "subs", "subtitles"] {
+        let sub_dir = parent.join(sub);
+        if sub_dir.is_dir() {
+            dirs_to_search.push(sub_dir);
+        }
+    }
+
+    for dir in &dirs_to_search {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !subtitle_extensions.contains(&ext.as_str()) {
+                continue;
+            }
+            let file_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            // Match if subtitle stem starts with video stem
+            if !file_stem.starts_with(&video_stem) {
+                continue;
+            }
+
+            let language = parse_subtitle_language(&file_stem, &video_stem);
+            let label = language
+                .as_deref()
+                .map(language_code_to_label)
+                .unwrap_or_else(|| {
+                    // Use the extra part of the filename as label, or "Unknown"
+                    let suffix = file_stem[video_stem.len()..].trim_start_matches('.');
+                    if suffix.is_empty() {
+                        "Unknown".to_string()
+                    } else {
+                        suffix.to_string()
+                    }
+                });
+
+            tracks.push(super::types::SubtitleTrack {
+                label,
+                language,
+                path: path.clone(),
+                format: ext,
+            });
+        }
+    }
+
+    // Sort by label for consistent ordering
+    tracks.sort_by(|a, b| a.label.cmp(&b.label));
+    tracks
+}
+
+/// Parse language from the extra portion of a subtitle filename.
+/// E.g., "movie.en.srt" → Some("en"), "movie.English.srt" → Some("en")
+fn parse_subtitle_language(sub_stem: &str, video_stem: &str) -> Option<String> {
+    let suffix = sub_stem[video_stem.len()..].trim_start_matches('.');
+    if suffix.is_empty() {
+        return None;
+    }
+    // Take the last dot-separated segment as the language tag
+    let lang_part = suffix.rsplit('.').next().unwrap_or(suffix);
+    normalize_language_code(lang_part)
+}
+
+/// Normalize a language code or name to a 2-letter ISO 639-1 code.
+pub fn normalize_language_code(code: &str) -> Option<String> {
+    match code.to_lowercase().as_str() {
+        // ISO 639-1
+        "en" | "eng" | "english" => Some("en".into()),
+        "es" | "spa" | "spanish" => Some("es".into()),
+        "fr" | "fre" | "fra" | "french" => Some("fr".into()),
+        "de" | "ger" | "deu" | "german" => Some("de".into()),
+        "it" | "ita" | "italian" => Some("it".into()),
+        "pt" | "por" | "portuguese" => Some("pt".into()),
+        "ru" | "rus" | "russian" => Some("ru".into()),
+        "ja" | "jpn" | "japanese" => Some("ja".into()),
+        "ko" | "kor" | "korean" => Some("ko".into()),
+        "zh" | "chi" | "zho" | "chinese" => Some("zh".into()),
+        "ar" | "ara" | "arabic" => Some("ar".into()),
+        "hi" | "hin" | "hindi" => Some("hi".into()),
+        "nl" | "dut" | "nld" | "dutch" => Some("nl".into()),
+        "pl" | "pol" | "polish" => Some("pl".into()),
+        "sv" | "swe" | "swedish" => Some("sv".into()),
+        "da" | "dan" | "danish" => Some("da".into()),
+        "no" | "nor" | "norwegian" => Some("no".into()),
+        "fi" | "fin" | "finnish" => Some("fi".into()),
+        "tr" | "tur" | "turkish" => Some("tr".into()),
+        "el" | "gre" | "ell" | "greek" => Some("el".into()),
+        "he" | "heb" | "hebrew" => Some("he".into()),
+        "th" | "tha" | "thai" => Some("th".into()),
+        "vi" | "vie" | "vietnamese" => Some("vi".into()),
+        "id" | "ind" | "indonesian" => Some("id".into()),
+        "ms" | "may" | "msa" | "malay" => Some("ms".into()),
+        "ro" | "rum" | "ron" | "romanian" => Some("ro".into()),
+        "hu" | "hun" | "hungarian" => Some("hu".into()),
+        "cs" | "cze" | "ces" | "czech" => Some("cs".into()),
+        "uk" | "ukr" | "ukrainian" => Some("uk".into()),
+        _ => None,
+    }
+}
+
+/// Convert a 2-letter language code to a human-readable label.
+pub fn language_code_to_label(code: &str) -> String {
+    match code {
+        "en" => "English",
+        "es" => "Spanish",
+        "fr" => "French",
+        "de" => "German",
+        "it" => "Italian",
+        "pt" => "Portuguese",
+        "ru" => "Russian",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "zh" => "Chinese",
+        "ar" => "Arabic",
+        "hi" => "Hindi",
+        "nl" => "Dutch",
+        "pl" => "Polish",
+        "sv" => "Swedish",
+        "da" => "Danish",
+        "no" => "Norwegian",
+        "fi" => "Finnish",
+        "tr" => "Turkish",
+        "el" => "Greek",
+        "he" => "Hebrew",
+        "th" => "Thai",
+        "vi" => "Vietnamese",
+        "id" => "Indonesian",
+        "ms" => "Malay",
+        "ro" => "Romanian",
+        "hu" => "Hungarian",
+        "cs" => "Czech",
+        "uk" => "Ukrainian",
+        _ => code,
+    }
+    .to_string()
+}
+
 /// Check if a file extension suggests a web-compatible format.
 pub fn is_web_compatible(path: &std::path::Path) -> bool {
     matches!(

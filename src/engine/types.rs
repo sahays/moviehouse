@@ -5,6 +5,14 @@ use uuid::Uuid;
 // ── From library.rs ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtitleTrack {
+    pub label: String,
+    pub language: Option<String>,
+    pub path: PathBuf,
+    pub format: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MediaType {
     Movie,
     Show,
@@ -73,6 +81,18 @@ pub struct MediaEntry {
     pub group_id: Option<Uuid>,
     #[serde(default)]
     pub tmdb_id: Option<u64>,
+    /// Detected subtitle files alongside this media
+    #[serde(default)]
+    pub subtitles: Vec<SubtitleTrack>,
+    /// Unix timestamp of when this was last played
+    #[serde(default)]
+    pub last_played_at: Option<u64>,
+    /// Playback progress in seconds
+    #[serde(default)]
+    pub play_position: Option<f64>,
+    /// Total duration of media in seconds
+    #[serde(default)]
+    pub duration: Option<f64>,
 }
 
 // ── From store.rs ──

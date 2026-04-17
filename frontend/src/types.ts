@@ -28,6 +28,13 @@ export type TranscodeState =
   | "Skipped"
   | "Unavailable";
 
+export interface SubtitleTrack {
+  label: string;
+  language: string | null;
+  path: string;
+  format: string;
+}
+
 export interface MediaEntry {
   id: string;
   title: string;
@@ -55,6 +62,10 @@ export interface MediaEntry {
   episode_title: string | null;
   group_id: string | null;
   tmdb_id: number | null;
+  subtitles: SubtitleTrack[];
+  last_played_at: number | null;
+  play_position: number | null;
+  duration: number | null;
 }
 
 export interface MediaGroup {

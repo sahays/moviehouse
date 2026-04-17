@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::engine::store::Store;
 use crate::engine::types::TranscodeState;
 
-use super::ffmpeg::{run_ffmpeg_encode, run_remux};
+use super::ffmpeg::{extract_subtitles, run_ffmpeg_encode, run_remux};
 use super::probe::probe_file;
 
 static FFMPEG_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -255,6 +255,39 @@ impl TranscodeRunner {
                 match result {
                     Ok(()) => {
                         eprintln!("Transcode complete: {}", job.output_path.display());
+
+                        // Extract embedded subtitles from the source file
+                        if let Some(ref p) = probe
+                            && !p.subtitle_streams.is_empty()
+                        {
+                            let output_dir = job
+                                .output_path
+                                .parent()
+                                .unwrap_or(std::path::Path::new("."));
+                            let output_stem = job
+                                .output_path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("subs");
+                            let sub_tracks = extract_subtitles(
+                                &job.input_path,
+                                output_dir,
+                                output_stem,
+                                &p.subtitle_streams,
+                            )
+                            .await;
+                            if !sub_tracks.is_empty() {
+                                if let Ok(Some(mut entry)) = store.get_media(&job.media_id) {
+                                    entry.subtitles = sub_tracks;
+                                    let _ = store.put_media(&entry);
+                                }
+                                eprintln!(
+                                    "Extracted subtitles for: {}",
+                                    job.output_path.display()
+                                );
+                            }
+                        }
+
                         let _ = store.update_transcode_state(
                             &job.media_id,
                             TranscodeState::Ready {

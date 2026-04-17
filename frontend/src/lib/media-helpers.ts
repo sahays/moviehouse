@@ -43,3 +43,23 @@ export function isPlayable(entry: MediaEntry): boolean {
 export function isActivelyTranscoding(state: TranscodeState): boolean {
   return typeof state === "object" && "Transcoding" in state;
 }
+
+export function hasProgress(entry: MediaEntry): boolean {
+  return (
+    entry.play_position != null &&
+    entry.play_position > 30 &&
+    entry.duration != null &&
+    entry.duration > 0 &&
+    entry.play_position / entry.duration < 0.9
+  );
+}
+
+export function progressPercent(entry: MediaEntry): number {
+  if (
+    entry.play_position == null ||
+    entry.duration == null ||
+    entry.duration === 0
+  )
+    return 0;
+  return Math.min(100, (entry.play_position / entry.duration) * 100);
+}

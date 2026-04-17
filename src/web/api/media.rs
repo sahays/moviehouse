@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use axum::Json;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -199,4 +200,210 @@ pub async fn stream_segment(
         body,
     )
         .into_response()
+}
+
+/// List available subtitle tracks for a media entry.
+/// Performs lazy re-detection if no subtitles are stored.
+pub async fn list_subtitles(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let Ok(Some(mut entry)) = state.store.get_media(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    // Lazy re-detection: if no subtitles stored, try detecting now
+    if entry.subtitles.is_empty() {
+        let detected = crate::engine::library::detect_subtitle_files(&entry.media_file);
+        if !detected.is_empty() {
+            entry.subtitles = detected;
+            let _ = state.store.put_media(&entry);
+        }
+    }
+
+    let subs: Vec<serde_json::Value> = entry
+        .subtitles
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            serde_json::json!({
+                "index": i,
+                "label": s.label,
+                "language": s.language,
+                "format": s.format,
+            })
+        })
+        .collect();
+
+    Json(subs).into_response()
+}
+
+/// Serve a subtitle file, converting SRT to VTT on the fly.
+pub async fn stream_subtitle(
+    State(state): State<Arc<AppState>>,
+    Path((id, index)): Path<(Uuid, usize)>,
+) -> impl IntoResponse {
+    let Ok(Some(mut entry)) = state.store.get_media(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    // Lazy re-detection
+    if entry.subtitles.is_empty() {
+        let detected = crate::engine::library::detect_subtitle_files(&entry.media_file);
+        if !detected.is_empty() {
+            entry.subtitles = detected;
+            let _ = state.store.put_media(&entry);
+        }
+    }
+
+    let Some(track) = entry.subtitles.get(index) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let Ok(raw_bytes) = tokio::fs::read(&track.path).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let content = String::from_utf8_lossy(&raw_bytes);
+
+    let vtt = match track.format.as_str() {
+        "vtt" => content.into_owned(),
+        "srt" => srt_to_vtt(&content),
+        _ => srt_to_vtt(&content), // best-effort for other formats
+    };
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/vtt; charset=utf-8".to_string())],
+        vtt,
+    )
+        .into_response()
+}
+
+/// Convert SRT subtitle format to WebVTT.
+fn srt_to_vtt(srt: &str) -> String {
+    let mut vtt = String::from("WEBVTT\n\n");
+    for line in srt.lines() {
+        if line.contains("-->") {
+            vtt.push_str(&line.replace(',', "."));
+        } else {
+            vtt.push_str(line);
+        }
+        vtt.push('\n');
+    }
+    vtt
+}
+
+#[derive(serde::Deserialize)]
+pub struct ProgressRequest {
+    pub position: f64,
+    pub duration: f64,
+}
+
+/// Update playback progress for a media entry.
+pub async fn update_progress(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ProgressRequest>,
+) -> impl IntoResponse {
+    match state.store.update_play_progress(&id, req.position, req.duration) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Upload a subtitle file for a media entry.
+/// Accepts multipart form with a "file" field containing .srt or .vtt.
+pub async fn upload_subtitle(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let Ok(Some(mut entry)) = state.store.get_media(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    // Read the uploaded file
+    let mut file_bytes = Vec::new();
+    let mut original_name = String::new();
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("file") {
+            original_name = field
+                .file_name()
+                .unwrap_or("subtitle.srt")
+                .to_string();
+            if let Ok(bytes) = field.bytes().await {
+                file_bytes = bytes.to_vec();
+            }
+            break;
+        }
+    }
+
+    if file_bytes.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "no file uploaded" })),
+        )
+            .into_response();
+    }
+
+    // Determine output path: save next to the video file (or transcoded output)
+    let base_dir = entry
+        .versions
+        .values()
+        .next()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .or_else(|| entry.media_file.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let video_stem = entry
+        .versions
+        .values()
+        .next()
+        .or(Some(&entry.media_file))
+        .and_then(|p| p.file_stem().and_then(|s| s.to_str()))
+        .unwrap_or("media");
+
+    let ext = std::path::Path::new(&original_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("srt")
+        .to_lowercase();
+
+    // Generate unique filename
+    let idx = entry.subtitles.len();
+    let out_filename = format!("{video_stem}.uploaded{idx}.{ext}");
+    let out_path = base_dir.join(&out_filename);
+
+    if let Err(e) = tokio::fs::write(&out_path, &file_bytes).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Parse language from filename if possible
+    let name_stem = std::path::Path::new(&original_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let language = name_stem
+        .rsplit('.')
+        .next()
+        .and_then(|s| crate::engine::library::normalize_language_code(s));
+    let label = language
+        .as_deref()
+        .map(crate::engine::library::language_code_to_label)
+        .unwrap_or_else(|| original_name.clone());
+
+    entry.subtitles.push(crate::engine::types::SubtitleTrack {
+        label,
+        language,
+        path: out_path,
+        format: ext,
+    });
+    let _ = state.store.put_media(&entry);
+
+    Json(serde_json::json!({ "status": "ok", "count": entry.subtitles.len() })).into_response()
 }

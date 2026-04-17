@@ -219,6 +219,10 @@ impl SessionManager {
                             episode_title: episode_info.episode_title,
                             group_id,
                             tmdb_id: None,
+                            subtitles: crate::engine::library::detect_subtitle_files(video_file),
+                            last_played_at: None,
+                            play_position: None,
+                            duration: None,
                         };
 
                         let _ = store.put_media(&entry);

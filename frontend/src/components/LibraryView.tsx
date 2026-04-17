@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { ChevronLeft, Tv, Film, Wand2, RotateCcw } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronLeft, Tv, Film, Wand2, RotateCcw, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { MediaEntry, MediaGroup } from "../types";
 import { MediaCard } from "./MediaCard";
 import { ShowCard } from "./ShowCard";
 import { VideoPlayer } from "./VideoPlayer";
-import { formatBytes } from "@/lib/formatters";
+import { formatBytes, formatPlaybackTime } from "@/lib/formatters";
+import { hasProgress, progressPercent } from "@/lib/media-helpers";
 import { useLibraryGroups } from "@/hooks/useLibraryGroups";
 
 interface LibraryViewProps {
@@ -40,6 +41,14 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
   };
 
   const { shows, movies } = useLibraryGroups(library);
+
+  const continueWatching = useMemo(
+    () =>
+      library
+        .filter((e) => hasProgress(e))
+        .sort((a, b) => (b.last_played_at ?? 0) - (a.last_played_at ?? 0)),
+    [library],
+  );
 
   // Derive selectedShow from latest library data (stays in sync with polling)
   const selectedShow = selectedGroupId
@@ -189,6 +198,7 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
                 ? `S${String(playing.season ?? 0).padStart(2, "0")}E${String(playing.episode).padStart(2, "0")} - ${playing.episode_title ?? playing.title}`
                 : playing.title
             }
+            startPosition={playing.play_position ?? undefined}
             onClose={() => setPlaying(null)}
           />
         )}
@@ -199,6 +209,64 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
   // Main library: show cards (clickable) + movie cards
   return (
     <>
+      {continueWatching.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3 flex items-center gap-2">
+            <Play size={14} />
+            Continue Watching
+          </h2>
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {continueWatching.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="shrink-0 w-32 group cursor-pointer text-left"
+                onClick={() => setPlaying(entry)}
+              >
+                <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gradient-to-br from-blue-900/40 to-cyan-900/30">
+                  {entry.poster_url ? (
+                    <img
+                      src={entry.poster_url}
+                      alt={entry.title}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <span className="text-3xl font-bold text-white/20">
+                        {entry.title.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                  )}
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                    <Play
+                      size={28}
+                      className="text-white/0 group-hover:text-white/90 transition-colors fill-current"
+                    />
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+                    <div
+                      className="h-full bg-red-500"
+                      style={{
+                        width: `${progressPercent(entry)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-[var(--color-text-primary)] mt-1.5 truncate">
+                  {entry.episode
+                    ? `S${String(entry.season ?? 0).padStart(2, "0")}E${String(entry.episode).padStart(2, "0")}`
+                    : entry.title}
+                </p>
+                <p className="text-xs text-[var(--color-text-tertiary)]">
+                  {formatPlaybackTime(entry.play_position ?? 0)} /{" "}
+                  {formatPlaybackTime(entry.duration ?? 0)}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {shows.length > 0 && (
         <div className="mb-6">
           <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3 flex items-center gap-2">
@@ -243,6 +311,7 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
         <VideoPlayer
           mediaId={playing.id}
           title={playing.episode_title ?? playing.title}
+          startPosition={playing.play_position ?? undefined}
           onClose={() => setPlaying(null)}
         />
       )}

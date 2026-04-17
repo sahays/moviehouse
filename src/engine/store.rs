@@ -246,6 +246,22 @@ impl Store {
         Ok(())
     }
 
+    /// Update playback progress for a media entry.
+    pub fn update_play_progress(
+        &self,
+        id: &Uuid,
+        position: f64,
+        duration: f64,
+    ) -> anyhow::Result<()> {
+        if let Some(mut entry) = self.get_media(id)? {
+            entry.play_position = Some(position);
+            entry.duration = Some(duration);
+            entry.last_played_at = Some(now_secs());
+            self.put_media(&entry)?;
+        }
+        Ok(())
+    }
+
     // ── Settings ──
 
     pub fn get_settings(&self) -> AppSettings {

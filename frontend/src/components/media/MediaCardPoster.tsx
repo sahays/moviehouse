@@ -1,5 +1,6 @@
 import { Play } from "lucide-react";
 import type { MediaEntry } from "../../types";
+import { progressPercent } from "@/lib/media-helpers";
 
 interface MediaCardPosterProps {
   entry: MediaEntry;
@@ -55,6 +56,16 @@ export function MediaCardPoster({
           />
         </div>
       ) : null}
+      {entry.play_position != null &&
+        entry.duration != null &&
+        entry.duration > 0 && (
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+            <div
+              className="h-full bg-red-500"
+              style={{ width: `${progressPercent(entry)}%` }}
+            />
+          </div>
+        )}
     </div>
   );
 }
