@@ -7,7 +7,7 @@ cargo build --release
 BINARY="./target/release/moviehouse"
 PID_FILE="/tmp/moviehouse.pid"
 LOG_FILE="/tmp/moviehouse.log"
-BIND="${1:-0.0.0.0:3000}"
+BIND="${1:-0.0.0.0:9000}"
 
 # Kill existing instance
 if [ -f "$PID_FILE" ]; then
