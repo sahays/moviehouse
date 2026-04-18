@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::engine::library::{MediaEntry, sanitize_filename};
 
 use super::runner::TranscodeJob;
 
-pub fn create_job(entry: &MediaEntry, preset: &str, transcode_dir: &PathBuf) -> TranscodeJob {
+pub fn create_job(entry: &MediaEntry, preset: &str, transcode_dir: &Path) -> TranscodeJob {
     let sanitized = sanitize_filename(&entry.title);
     let ep_suffix = match (entry.season, entry.episode) {
         (Some(s), Some(e)) => format!("-s{s:02}e{e:02}"),

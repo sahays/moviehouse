@@ -160,7 +160,9 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
 
     // Prevent macOS from sleeping while the server is running
     #[cfg(target_os = "macos")]
-    let _caffeinate = if !allow_sleep {
+    let _caffeinate = if allow_sleep {
+        None
+    } else {
         match std::process::Command::new("caffeinate")
             .args(["-i", "-w", &std::process::id().to_string()])
             .spawn()
@@ -174,8 +176,6 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
                 None
             }
         }
-    } else {
-        None
     };
 
     let config = Config::load();

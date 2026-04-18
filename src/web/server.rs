@@ -21,6 +21,7 @@ pub struct AppState {
     pub transcode: TranscodeHandle,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn create_router(state: &Arc<AppState>) -> Router {
     use super::api::{filesystem, library, media, settings, torrents, transcode};
 
@@ -61,8 +62,7 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/media/{id}/subtitles",
-            axum::routing::get(media::list_subtitles)
-                .post(media::upload_subtitle),
+            axum::routing::get(media::list_subtitles).post(media::upload_subtitle),
         )
         .route(
             "/api/v1/media/{id}/subtitles/{index}",

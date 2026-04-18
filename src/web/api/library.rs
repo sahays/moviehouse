@@ -53,21 +53,21 @@ pub async fn delete_library_item(
     StatusCode::NO_CONTENT
 }
 
-/// Fix media_file paths that point to missing files by using the best available version.
+/// Fix `media_file` paths that point to missing files by using the best available version.
 pub async fn fix_paths(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let entries = state.store.list_media().unwrap_or_default();
     let mut fixed = 0u32;
 
     for mut e in entries {
-        if !e.media_file.exists() {
-            if let Some(v) = e.versions.values().next().cloned() {
-                e.media_file = v.clone();
-                if e.transcoded_path.as_ref().is_some_and(|tp| !tp.exists()) {
-                    e.transcoded_path = Some(v);
-                }
-                let _ = state.store.put_media(&e);
-                fixed += 1;
+        if !e.media_file.exists()
+            && let Some(v) = e.versions.values().next().cloned()
+        {
+            e.media_file.clone_from(&v);
+            if e.transcoded_path.as_ref().is_some_and(|tp| !tp.exists()) {
+                e.transcoded_path = Some(v);
             }
+            let _ = state.store.put_media(&e);
+            fixed += 1;
         }
     }
 
@@ -179,7 +179,7 @@ pub async fn list_groups(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "rating": first.rating,
                 "is_show": first.show_name.is_some(),
                 "episode_count": entries.len(),
-                "season_count": season_counts.get(gid).map_or(0, |s| s.len()),
+                "season_count": season_counts.get(gid).map_or(0, std::collections::HashSet::len),
                 "entries": entries,
             })
         }).collect::<Vec<_>>(),
@@ -192,7 +192,10 @@ pub async fn refresh_group_metadata(
     Path(group_id): Path<Uuid>,
     Query(query): Query<SeasonQuery>,
 ) -> impl IntoResponse {
-    let mut group_entries = state.store.list_media_by_group(&group_id).unwrap_or_default();
+    let mut group_entries = state
+        .store
+        .list_media_by_group(&group_id)
+        .unwrap_or_default();
     if let Some(season) = query.season {
         group_entries.retain(|e| e.season == Some(season));
     }
@@ -400,7 +403,8 @@ pub async fn scan_folder(
 
     // Load library once — build both the dedup set and the existing-entries map
     let all_media = state.store.list_media().unwrap_or_default();
-    let mut existing: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut existing: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
     let mut existing_entries: std::collections::HashMap<
         std::path::PathBuf,
         crate::engine::library::MediaEntry,
@@ -457,10 +461,7 @@ pub async fn scan_folder(
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
                 .to_path_buf();
-            movie_groups
-                .entry(dir)
-                .or_default()
-                .push(file_infos.len());
+            movie_groups.entry(dir).or_default().push(file_infos.len());
         }
 
         file_infos.push((video_file.clone(), episode_info, title, year));
@@ -626,7 +627,11 @@ pub async fn scan_folder(
         ) {
             let settings = state.store.get_settings();
             if settings.auto_transcode {
-                let job = crate::transcode::job::create_job(&entry, &settings.default_preset, &settings.transcode_dir);
+                let job = crate::transcode::job::create_job(
+                    &entry,
+                    &settings.default_preset,
+                    &settings.transcode_dir,
+                );
                 let tc = state.transcode.clone();
                 tokio::spawn(async move {
                     tc.submit(job).await;

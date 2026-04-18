@@ -133,9 +133,7 @@ export function TranscodeSettings({
                 to new location
               </span>
             ) : (
-              <span className="text-emerald-400">
-                Storage path updated
-              </span>
+              <span className="text-emerald-400">Storage path updated</span>
             )}
             {migrateResult.errors > 0 && (
               <span className="text-red-400 ml-2">

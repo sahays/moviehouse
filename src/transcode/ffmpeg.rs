@@ -226,26 +226,26 @@ pub async fn extract_subtitles(
             .await;
 
         if result.is_ok_and(|s| s.success()) && vtt_path.exists() {
-            let language = stream.language.as_deref().and_then(|l| {
-                crate::engine::library::normalize_language_code(l)
-            });
-            let label = language
+            let language = stream
+                .language
                 .as_deref()
-                .map(crate::engine::library::language_code_to_label)
-                .unwrap_or_else(|| {
-                    stream.language.clone().unwrap_or_else(|| format!("Track {}", i + 1))
-                });
+                .and_then(crate::engine::library::normalize_language_code);
+            let label = language.as_deref().map_or_else(
+                || {
+                    stream
+                        .language
+                        .clone()
+                        .unwrap_or_else(|| format!("Track {}", i + 1))
+                },
+                crate::engine::library::language_code_to_label,
+            );
+            eprintln!("  Extracted subtitle: {label} (stream {})", stream.index);
             tracks.push(crate::engine::types::SubtitleTrack {
                 label,
                 language,
                 path: vtt_path,
                 format: "vtt".into(),
             });
-            eprintln!(
-                "  Extracted subtitle: {} (stream {})",
-                tracks.last().unwrap().label,
-                stream.index
-            );
         }
     }
 

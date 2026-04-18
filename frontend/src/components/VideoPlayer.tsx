@@ -161,6 +161,7 @@ export function VideoPlayer({
             </Button>
           </div>
         </div>
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption -- captions provided dynamically via subtitle tracks */}
         <video
           ref={videoRef}
           controls

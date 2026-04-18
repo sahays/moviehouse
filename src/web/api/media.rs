@@ -261,10 +261,10 @@ pub async fn stream_subtitle(
 
     let content = String::from_utf8_lossy(&raw_bytes);
 
-    let vtt = match track.format.as_str() {
-        "vtt" => content.into_owned(),
-        "srt" => srt_to_vtt(&content),
-        _ => srt_to_vtt(&content), // best-effort for other formats
+    let vtt = if track.format == "vtt" {
+        content.into_owned()
+    } else {
+        srt_to_vtt(&content)
     };
 
     (
@@ -275,7 +275,7 @@ pub async fn stream_subtitle(
         .into_response()
 }
 
-/// Convert SRT subtitle format to WebVTT.
+/// Convert SRT subtitle format to `WebVTT`.
 fn srt_to_vtt(srt: &str) -> String {
     let mut vtt = String::from("WEBVTT\n\n");
     for line in srt.lines() {
@@ -309,11 +309,16 @@ pub async fn update_progress(
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    match state.store.update_play_progress(&id, req.position, req.duration) {
+    match state
+        .store
+        .update_play_progress(&id, req.position, req.duration)
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+
+const MAX_SUBTITLE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 
 /// Upload a subtitle file for a media entry.
 /// Accepts multipart form with a "file" field containing .srt or .vtt.
@@ -331,18 +336,13 @@ pub async fn upload_subtitle(
     let mut original_name = String::new();
     while let Ok(Some(field)) = multipart.next_field().await {
         if field.name() == Some("file") {
-            original_name = field
-                .file_name()
-                .unwrap_or("subtitle.srt")
-                .to_string();
+            original_name = field.file_name().unwrap_or("subtitle.srt").to_string();
             if let Ok(bytes) = field.bytes().await {
                 file_bytes = bytes.to_vec();
             }
             break;
         }
     }
-
-    const MAX_SUBTITLE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 
     if file_bytes.is_empty() {
         return (
@@ -361,10 +361,7 @@ pub async fn upload_subtitle(
     }
 
     // Sanitize filename
-    if original_name.contains('/')
-        || original_name.contains('\\')
-        || original_name.contains("..")
-    {
+    if original_name.contains('/') || original_name.contains('\\') || original_name.contains("..") {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "invalid filename" })),
@@ -425,11 +422,11 @@ pub async fn upload_subtitle(
     let language = name_stem
         .rsplit('.')
         .next()
-        .and_then(|s| crate::engine::library::normalize_language_code(s));
-    let label = language
-        .as_deref()
-        .map(crate::engine::library::language_code_to_label)
-        .unwrap_or_else(|| original_name.clone());
+        .and_then(crate::engine::library::normalize_language_code);
+    let label = language.as_deref().map_or_else(
+        || original_name.clone(),
+        crate::engine::library::language_code_to_label,
+    );
 
     entry.subtitles.push(crate::engine::types::SubtitleTrack {
         label,

@@ -48,6 +48,7 @@ pub async fn list_presets() -> impl IntoResponse {
     Json(crate::transcode::presets::builtin_presets())
 }
 
+#[allow(clippy::too_many_lines)]
 /// Move all transcoded media files to a new directory, updating all paths in the database.
 pub async fn migrate_media(
     State(state): State<Arc<AppState>>,
@@ -108,7 +109,7 @@ pub async fn migrate_media(
                 }
                 MoveResult::NotFound | MoveResult::Failed => {
                     if let Some(v) = e.versions.values().next() {
-                        *tp = v.clone();
+                        tp.clone_from(v);
                         changed = true;
                     }
                 }
@@ -152,10 +153,8 @@ pub async fn migrate_media(
             MoveResult::AlreadyThere => {}
         }
 
-        if changed {
-            if state.store.put_media(&e).is_err() {
-                errors += 1;
-            }
+        if changed && state.store.put_media(&e).is_err() {
+            errors += 1;
         }
     }
 
@@ -166,11 +165,11 @@ pub async fn migrate_media(
         if let Ok(entries) = std::fs::read_dir(&old_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() {
-                    if let MoveResult::Moved(_, size) = move_file(&path, &new_dir) {
-                        moved += 1;
-                        bytes_moved += size;
-                    }
+                if path.is_file()
+                    && let MoveResult::Moved(_, size) = move_file(&path, &new_dir)
+                {
+                    moved += 1;
+                    bytes_moved += size;
                 }
             }
         }
@@ -230,7 +229,10 @@ fn move_file(src: &std::path::Path, dest_dir: &std::path::Path) -> MoveResult {
     // Cross-filesystem: copy then delete
     if std::fs::copy(src, &dest).is_ok() {
         if let Err(e) = std::fs::remove_file(src) {
-            eprintln!("Warning: copied but failed to delete source {}: {e}", src.display());
+            eprintln!(
+                "Warning: copied but failed to delete source {}: {e}",
+                src.display()
+            );
         }
         MoveResult::Moved(dest, size)
     } else {

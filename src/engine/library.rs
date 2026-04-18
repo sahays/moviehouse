@@ -2,6 +2,14 @@ use std::path::PathBuf;
 
 pub use super::types::{MediaEntry, MediaType, TranscodeState};
 
+/// Pre-lowercased quality/codec tags for zero-alloc matching in title parsing.
+const QUALITY_TAGS: &[&str] = &[
+    "1080p", "720p", "2160p", "4k", "bluray", "bdrip", "brrip", "web-dl", "webdl", "webrip",
+    "web dl", "hdtv", "dvdrip", "hdrip", "x264", "x265", "h264", "h 264", "h265", "hevc", "avc",
+    "aac", "dts", "ac3", "flac", "remux", "hdr", "10bit", "10 bit", "amzn", "nf", "dsnp", "hmax",
+    "atvp", "rarbg", "yts", "yify", "evo", "fgt", "sparks",
+];
+
 /// Parse a torrent/file name into a clean title and optional year.
 /// E.g., "The.Matrix.1999.1080p.BluRay.x264-Group" -> ("The Matrix", Some(1999))
 pub fn parse_media_title(raw: &str) -> (String, Option<u16>) {
@@ -40,16 +48,6 @@ pub fn parse_media_title(raw: &str) -> (String, Option<u16>) {
             }
         }
     }
-
-    // Strip everything after common quality/codec tags (pre-lowercased for zero-alloc matching)
-    const QUALITY_TAGS: &[&str] = &[
-        "1080p", "720p", "2160p", "4k", "bluray", "bdrip", "brrip",
-        "web-dl", "webdl", "webrip", "web dl", "hdtv", "dvdrip", "hdrip",
-        "x264", "x265", "h264", "h 264", "h265", "hevc", "avc", "aac",
-        "dts", "ac3", "flac", "remux", "hdr", "10bit", "10 bit",
-        "amzn", "nf", "dsnp", "hmax", "atvp", "rarbg", "yts", "yify",
-        "evo", "fgt", "sparks",
-    ];
 
     let lower = s.to_lowercase();
     let mut cut_pos = s.len();
@@ -317,18 +315,17 @@ pub fn detect_subtitle_files(video_path: &std::path::Path) -> Vec<super::types::
             }
 
             let language = parse_subtitle_language(&file_stem, &video_stem);
-            let label = language
-                .as_deref()
-                .map(language_code_to_label)
-                .unwrap_or_else(|| {
-                    // Use the extra part of the filename as label, or "Unknown"
+            let label = language.as_deref().map_or_else(
+                || {
                     let suffix = file_stem[video_stem.len()..].trim_start_matches('.');
                     if suffix.is_empty() {
                         "Unknown".to_string()
                     } else {
                         suffix.to_string()
                     }
-                });
+                },
+                language_code_to_label,
+            );
 
             tracks.push(super::types::SubtitleTrack {
                 label,
