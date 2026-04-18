@@ -7,7 +7,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Folder, FolderUp, Check, FolderOpen } from "lucide-react";
+import { Folder, FolderUp, Check, FolderOpen, HardDrive } from "lucide-react";
 
 interface FolderPickerProps {
   onSelect: (path: string) => void;
@@ -32,7 +32,10 @@ export function FolderPicker({ onSelect }: FolderPickerProps) {
         : "/api/v1/filesystem/browse";
       const res = await fetch(url);
       const data = await res.json();
-      setResult(data);
+      if (data && Array.isArray(data.dirs)) {
+        setResult(data);
+      }
+      // else: API error response, keep showing current result
     } catch {
       // Network error
     }
@@ -70,11 +73,21 @@ export function FolderPicker({ onSelect }: FolderPickerProps) {
 
           {result && (
             <div className="overflow-hidden">
-              <div
-                className="text-xs text-muted-foreground mb-2 font-mono truncate px-1"
-                title={result.current}
-              >
-                {result.current}
+              <div className="flex items-center gap-2 mb-2">
+                <div
+                  className="text-xs text-muted-foreground font-mono truncate px-1 flex-1"
+                  title={result.current}
+                >
+                  {result.current}
+                </div>
+                <button
+                  onClick={() => browse("/Volumes")}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/50 rounded transition-colors shrink-0"
+                  title="Browse external drives"
+                >
+                  <HardDrive size={12} />
+                  Drives
+                </button>
               </div>
 
               <div className="max-h-72 overflow-y-auto overflow-x-hidden border rounded-md">

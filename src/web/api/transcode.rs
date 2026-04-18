@@ -42,7 +42,8 @@ pub async fn manual_transcode(
             .into_response();
     }
 
-    let job = crate::transcode::job::create_job(&entry, &req.preset);
+    let settings = state.store.get_settings();
+    let job = crate::transcode::job::create_job(&entry, &req.preset, &settings.transcode_dir);
 
     let _ = state
         .store
@@ -98,7 +99,7 @@ pub async fn transcode_all(
     let mut queued = 0u32;
 
     for entry in &group_entries {
-        let job = crate::transcode::job::create_job(entry, &settings.default_preset);
+        let job = crate::transcode::job::create_job(entry, &settings.default_preset, &settings.transcode_dir);
 
         // Reset state to Pending before queueing
         let _ = state

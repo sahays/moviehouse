@@ -41,19 +41,20 @@ pub fn parse_media_title(raw: &str) -> (String, Option<u16>) {
         }
     }
 
-    // Strip everything after common quality/codec tags
-    let tags = [
-        "1080p", "720p", "2160p", "4K", "4k", "BluRay", "Bluray", "BLURAY", "BDRip", "BRRip",
-        "WEB-DL", "WEBDL", "WEBRip", "WEBRIP", "WEB DL", "HDTV", "DVDRip", "HDRip", "x264", "x265",
-        "H264", "H 264", "H265", "HEVC", "AVC", "AAC", "DTS", "AC3", "FLAC", "REMUX", "HDR",
-        "10bit", "10 bit", "AMZN", "NF", "DSNP", "HMAX", "ATVP", "RARBG", "YTS", "YIFY", "EVO",
-        "FGT", "SPARKS",
+    // Strip everything after common quality/codec tags (pre-lowercased for zero-alloc matching)
+    const QUALITY_TAGS: &[&str] = &[
+        "1080p", "720p", "2160p", "4k", "bluray", "bdrip", "brrip",
+        "web-dl", "webdl", "webrip", "web dl", "hdtv", "dvdrip", "hdrip",
+        "x264", "x265", "h264", "h 264", "h265", "hevc", "avc", "aac",
+        "dts", "ac3", "flac", "remux", "hdr", "10bit", "10 bit",
+        "amzn", "nf", "dsnp", "hmax", "atvp", "rarbg", "yts", "yify",
+        "evo", "fgt", "sparks",
     ];
 
     let lower = s.to_lowercase();
     let mut cut_pos = s.len();
-    for tag in &tags {
-        if let Some(pos) = lower.find(&tag.to_lowercase())
+    for tag in QUALITY_TAGS {
+        if let Some(pos) = lower.find(tag)
             && pos < cut_pos
         {
             cut_pos = pos;
@@ -110,8 +111,11 @@ pub fn sanitize_filename(title: &str) -> String {
 }
 
 /// Detect video files in a directory (fully recursive), return sorted by size (largest first).
+/// Minimum file size to consider as a real video (skip samples, thumbnails, junk).
+const MIN_VIDEO_SIZE: u64 = 1_000_000; // 1 MB
+
 pub fn detect_video_files(dir: &std::path::Path) -> Vec<PathBuf> {
-    let video_extensions = ["mkv", "mp4", "avi", "m4v", "mov", "wmv", "ts", "webm"];
+    let video_extensions = ["mkv", "mp4", "avi", "m4v", "mov", "wmv", "webm"];
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
     collect_video_files_recursive(dir, &video_extensions, &mut files);
     files.sort_by(|a, b| b.1.cmp(&a.1));
@@ -128,14 +132,19 @@ fn collect_video_files_recursive(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        if path.is_dir() && !path.is_symlink() {
             collect_video_files_recursive(&path, exts, files);
         } else if path.is_file()
+            && !path.is_symlink()
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && !name.starts_with("._")
             && let Some(ext) = path.extension().and_then(|e| e.to_str())
             && exts.contains(&ext.to_lowercase().as_str())
         {
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            files.push((path, size));
+            if size >= MIN_VIDEO_SIZE {
+                files.push((path, size));
+            }
         }
     }
 }

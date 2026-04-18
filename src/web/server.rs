@@ -44,6 +44,10 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             axum::routing::post(library::cleanup_sources),
         )
         .route(
+            "/api/v1/library/fix-paths",
+            axum::routing::post(library::fix_paths),
+        )
+        .route(
             "/api/v1/library/{id}/refresh",
             axum::routing::post(library::refresh_metadata),
         )
@@ -79,6 +83,10 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         .route(
             "/api/v1/transcode/presets",
             axum::routing::get(settings::list_presets),
+        )
+        .route(
+            "/api/v1/library/migrate",
+            axum::routing::post(settings::migrate_media),
         )
         .route(
             "/api/v1/library/{id}/transcode",
@@ -118,6 +126,8 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         )
         .with_state(state.clone());
 
+    // CORS: allow any origin for LAN access (phones, TVs, other devices).
+    // Credentials are not allowed (no .allow_credentials), limiting CSRF risk.
     Router::new().merge(api).fallback(static_handler).layer(
         CorsLayer::new()
             .allow_origin(tower_http::cors::Any)

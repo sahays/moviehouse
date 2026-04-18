@@ -108,6 +108,7 @@ pub struct AppSettings {
     pub default_preset: String,
     pub tmdb_api_key: String,
     pub transcode_concurrency: usize,
+    pub transcode_dir: PathBuf,
 }
 
 impl Default for AppSettings {
@@ -121,8 +122,16 @@ impl Default for AppSettings {
             default_preset: "hevc".into(),
             tmdb_api_key: String::new(),
             transcode_concurrency: 2,
+            transcode_dir: default_transcode_dir(),
         }
     }
+}
+
+pub fn default_transcode_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".movies")
+        .join("transcoded")
 }
 
 /// Persisted record for a download (what we need to restore it).

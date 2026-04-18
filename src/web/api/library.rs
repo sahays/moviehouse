@@ -53,6 +53,27 @@ pub async fn delete_library_item(
     StatusCode::NO_CONTENT
 }
 
+/// Fix media_file paths that point to missing files by using the best available version.
+pub async fn fix_paths(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let entries = state.store.list_media().unwrap_or_default();
+    let mut fixed = 0u32;
+
+    for mut e in entries {
+        if !e.media_file.exists() {
+            if let Some(v) = e.versions.values().next().cloned() {
+                e.media_file = v.clone();
+                if e.transcoded_path.as_ref().is_some_and(|tp| !tp.exists()) {
+                    e.transcoded_path = Some(v);
+                }
+                let _ = state.store.put_media(&e);
+                fixed += 1;
+            }
+        }
+    }
+
+    Json(serde_json::json!({ "fixed": fixed }))
+}
+
 /// Delete original source files for entries that have been transcoded.
 /// Only deletes source files where a transcoded version (Ready state) exists.
 pub async fn cleanup_sources(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -60,6 +81,8 @@ pub async fn cleanup_sources(State(state): State<Arc<AppState>>) -> impl IntoRes
     let mut deleted_count = 0u32;
     let mut freed_bytes = 0u64;
     let mut errors = 0u32;
+
+    let mut cleaned_dirs = std::collections::HashSet::new();
 
     for entry in &entries {
         // Only clean up entries that have been transcoded (Ready state or have versions)
@@ -94,18 +117,21 @@ pub async fn cleanup_sources(State(state): State<Arc<AppState>>) -> impl IntoRes
                 }
             }
         }
-    }
 
-    // Also try to clean empty parent directories
-    let mut cleaned_dirs = std::collections::HashSet::new();
-    for entry in &entries {
-        if let Some(parent) = entry.media_file.parent()
+        // Try to clean empty parent directory
+        if let Some(parent) = source.parent()
             && cleaned_dirs.insert(parent.to_path_buf())
             && parent.exists()
         {
-            // Remove dir only if empty
-            let _ = std::fs::remove_dir(parent); // fails silently if not empty
+            let _ = std::fs::remove_dir(parent);
         }
+    }
+
+    // Clean up the old default transcoded directory if it's not the current one and is empty
+    let settings = state.store.get_settings();
+    let default_dir = crate::engine::types::default_transcode_dir();
+    if settings.transcode_dir != default_dir && default_dir.exists() {
+        let _ = std::fs::remove_dir(&default_dir); // only succeeds if empty
     }
 
     let freed_mb = freed_bytes as f64 / (1024.0 * 1024.0);
@@ -126,7 +152,13 @@ pub async fn list_groups(State(state): State<Arc<AppState>>) -> impl IntoRespons
         Option<Uuid>,
         Vec<crate::engine::library::MediaEntry>,
     > = std::collections::HashMap::new();
+    let mut season_counts: std::collections::HashMap<Option<Uuid>, std::collections::HashSet<u16>> =
+        std::collections::HashMap::new();
+
     for entry in entries {
+        if let Some(s) = entry.season {
+            season_counts.entry(entry.group_id).or_default().insert(s);
+        }
         groups.entry(entry.group_id).or_default().push(entry);
     }
 
@@ -147,7 +179,7 @@ pub async fn list_groups(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "rating": first.rating,
                 "is_show": first.show_name.is_some(),
                 "episode_count": entries.len(),
-                "season_count": entries.iter().filter_map(|e| e.season).collect::<std::collections::BTreeSet<_>>().len(),
+                "season_count": season_counts.get(gid).map_or(0, |s| s.len()),
                 "entries": entries,
             })
         }).collect::<Vec<_>>(),
@@ -160,12 +192,10 @@ pub async fn refresh_group_metadata(
     Path(group_id): Path<Uuid>,
     Query(query): Query<SeasonQuery>,
 ) -> impl IntoResponse {
-    let entries = state.store.list_media().unwrap_or_default();
-    let group_entries: Vec<_> = entries
-        .into_iter()
-        .filter(|e| e.group_id.as_ref() == Some(&group_id))
-        .filter(|e| query.season.is_none() || e.season == query.season)
-        .collect();
+    let mut group_entries = state.store.list_media_by_group(&group_id).unwrap_or_default();
+    if let Some(season) = query.season {
+        group_entries.retain(|e| e.season == Some(season));
+    }
 
     if group_entries.is_empty() {
         return (
@@ -368,14 +398,23 @@ pub async fn scan_folder(
 
     let video_files = crate::engine::library::detect_video_files(&scan_path);
 
-    // Get existing media file paths to avoid duplicates
-    let existing: std::collections::HashSet<std::path::PathBuf> = state
-        .store
-        .list_media()
-        .unwrap_or_default()
-        .iter()
-        .map(|e| e.media_file.clone())
-        .collect();
+    // Load library once — build both the dedup set and the existing-entries map
+    let all_media = state.store.list_media().unwrap_or_default();
+    let mut existing: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut existing_entries: std::collections::HashMap<
+        std::path::PathBuf,
+        crate::engine::library::MediaEntry,
+    > = std::collections::HashMap::new();
+    for e in all_media {
+        existing.insert(e.media_file.clone());
+        for path in e.versions.values() {
+            existing.insert(path.clone());
+        }
+        if let Some(ref tp) = e.transcoded_path {
+            existing.insert(tp.clone());
+        }
+        existing_entries.insert(e.media_file.clone(), e);
+    }
 
     let mut added = 0u32;
     let mut skipped = 0u32;
@@ -390,19 +429,17 @@ pub async fn scan_folder(
         Option<u16>,
     )> = Vec::new();
 
-    // Build a map of existing entries by file path for updating orphans
-    let existing_entries: std::collections::HashMap<
-        std::path::PathBuf,
-        crate::engine::library::MediaEntry,
-    > = state
-        .store
-        .list_media()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| (e.media_file.clone(), e))
-        .collect();
+    // Track movie directories for grouping multi-file movies
+    let mut movie_groups: std::collections::HashMap<std::path::PathBuf, Vec<usize>> =
+        std::collections::HashMap::new();
 
     for video_file in &video_files {
+        // Skip files already in the library
+        if existing.contains(video_file) {
+            skipped += 1;
+            continue;
+        }
+
         let filename = video_file
             .file_stem()
             .and_then(|s| s.to_str())
@@ -415,13 +452,18 @@ pub async fn scan_folder(
                 .entry(episode_info.show_name.clone())
                 .or_default()
                 .push(file_infos.len());
+        } else {
+            let dir = video_file
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
+            movie_groups
+                .entry(dir)
+                .or_default()
+                .push(file_infos.len());
         }
 
-        let is_existing = existing.contains(video_file);
         file_infos.push((video_file.clone(), episode_info, title, year));
-        if is_existing {
-            skipped += 1;
-        }
     }
 
     // Assign group_ids for shows — reuse existing group_id if any entry in the group already has one
@@ -433,6 +475,20 @@ pub async fn scan_folder(
             existing_entries.get(path).and_then(|e| e.group_id)
         });
         group_map.insert(show_name.clone(), existing_gid.unwrap_or_else(Uuid::new_v4));
+    }
+
+    // Assign group_ids for movie directories with multiple files (extras/featurettes)
+    let mut movie_group_map: std::collections::HashMap<std::path::PathBuf, Uuid> =
+        std::collections::HashMap::new();
+    for (dir, indices) in &movie_groups {
+        if indices.len() > 1 {
+            // Check if any existing entry in this dir already has a group_id
+            let existing_gid = indices.iter().find_map(|&i| {
+                let path = &file_infos[i].0;
+                existing_entries.get(path).and_then(|e| e.group_id)
+            });
+            movie_group_map.insert(dir.clone(), existing_gid.unwrap_or_else(Uuid::new_v4));
+        }
     }
 
     // Track media_ids per show for group TMDB fetch
@@ -475,10 +531,14 @@ pub async fn scan_folder(
             crate::engine::library::TranscodeState::Unavailable
         };
 
+        let movie_dir = video_file
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
         let group_id = if episode_info.is_show {
             group_map.get(&episode_info.show_name).copied()
         } else {
-            None
+            movie_group_map.get(&movie_dir).copied()
         };
 
         let media_id = Uuid::new_v4();
@@ -512,6 +572,8 @@ pub async fn scan_folder(
             versions: std::collections::HashMap::new(),
             show_name: if episode_info.is_show {
                 Some(episode_info.show_name.clone())
+            } else if group_id.is_some() {
+                Some(title.clone()) // grouped movie — use title for frontend grouping
             } else {
                 None
             },
@@ -564,7 +626,7 @@ pub async fn scan_folder(
         ) {
             let settings = state.store.get_settings();
             if settings.auto_transcode {
-                let job = crate::transcode::job::create_job(&entry, &settings.default_preset);
+                let job = crate::transcode::job::create_job(&entry, &settings.default_preset, &settings.transcode_dir);
                 let tc = state.transcode.clone();
                 tokio::spawn(async move {
                     tc.submit(job).await;

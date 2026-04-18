@@ -94,6 +94,7 @@ export interface AppSettings {
   auto_transcode: boolean;
   default_preset: string;
   transcode_concurrency: number;
+  transcode_dir: string;
 }
 
 export interface TranscodePreset {

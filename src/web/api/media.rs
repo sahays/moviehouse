@@ -87,6 +87,19 @@ pub async fn stream_media(
 
     let total_size = metadata.len();
 
+    // Guard against 0-byte files (prevents u64 underflow in range math)
+    if total_size == 0 {
+        return (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "video/mp4".to_string()),
+                (header::CONTENT_LENGTH, "0".to_string()),
+            ],
+            Body::empty(),
+        )
+            .into_response();
+    }
+
     // Parse Range header
     let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
@@ -208,18 +221,9 @@ pub async fn list_subtitles(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let Ok(Some(mut entry)) = state.store.get_media(&id) else {
+    let Ok(Some(entry)) = state.store.get_media(&id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-
-    // Lazy re-detection: if no subtitles stored, try detecting now
-    if entry.subtitles.is_empty() {
-        let detected = crate::engine::library::detect_subtitle_files(&entry.media_file);
-        if !detected.is_empty() {
-            entry.subtitles = detected;
-            let _ = state.store.put_media(&entry);
-        }
-    }
 
     let subs: Vec<serde_json::Value> = entry
         .subtitles
@@ -243,18 +247,9 @@ pub async fn stream_subtitle(
     State(state): State<Arc<AppState>>,
     Path((id, index)): Path<(Uuid, usize)>,
 ) -> impl IntoResponse {
-    let Ok(Some(mut entry)) = state.store.get_media(&id) else {
+    let Ok(Some(entry)) = state.store.get_media(&id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-
-    // Lazy re-detection
-    if entry.subtitles.is_empty() {
-        let detected = crate::engine::library::detect_subtitle_files(&entry.media_file);
-        if !detected.is_empty() {
-            entry.subtitles = detected;
-            let _ = state.store.put_media(&entry);
-        }
-    }
 
     let Some(track) = entry.subtitles.get(index) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -306,6 +301,14 @@ pub async fn update_progress(
     Path(id): Path<Uuid>,
     Json(req): Json<ProgressRequest>,
 ) -> impl IntoResponse {
+    if !req.position.is_finite()
+        || !req.duration.is_finite()
+        || req.position < 0.0
+        || req.duration <= 0.0
+        || req.position > req.duration
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     match state.store.update_play_progress(&id, req.position, req.duration) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -339,10 +342,32 @@ pub async fn upload_subtitle(
         }
     }
 
+    const MAX_SUBTITLE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
     if file_bytes.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "no file uploaded" })),
+        )
+            .into_response();
+    }
+
+    if file_bytes.len() > MAX_SUBTITLE_SIZE {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({ "error": "subtitle file too large (max 10 MB)" })),
+        )
+            .into_response();
+    }
+
+    // Sanitize filename
+    if original_name.contains('/')
+        || original_name.contains('\\')
+        || original_name.contains("..")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid filename" })),
         )
             .into_response();
     }
@@ -369,6 +394,15 @@ pub async fn upload_subtitle(
         .and_then(|e| e.to_str())
         .unwrap_or("srt")
         .to_lowercase();
+
+    let allowed_exts = ["srt", "vtt", "ass", "ssa"];
+    if !allowed_exts.contains(&ext.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "unsupported subtitle format (use .srt, .vtt, .ass, .ssa)" })),
+        )
+            .into_response();
+    }
 
     // Generate unique filename
     let idx = entry.subtitles.len();

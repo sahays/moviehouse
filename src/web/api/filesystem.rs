@@ -19,7 +19,7 @@ pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoRes
         .path
         .map_or_else(|| home.clone(), std::path::PathBuf::from);
 
-    // Security: canonicalize to resolve symlinks, restrict to home directory
+    // Security: canonicalize to resolve symlinks, restrict to home directory or /Volumes
     let Ok(canonical) = std::fs::canonicalize(&path) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -30,7 +30,8 @@ pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoRes
             .into_response();
     };
     let canonical_home = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
-    if !canonical.starts_with(&canonical_home) {
+    let volumes = std::path::Path::new("/Volumes");
+    if !canonical.starts_with(&canonical_home) && !canonical.starts_with(volumes) {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiError {
@@ -50,7 +51,15 @@ pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoRes
             .into_response();
     }
 
-    let parent = path.parent().map(|p| p.to_string_lossy().to_string());
+    // Only offer parent navigation if parent is within allowed paths
+    let parent = path.parent().and_then(|p| {
+        let canon = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        if canon.starts_with(&canonical_home) || canon.starts_with(volumes) {
+            Some(p.to_string_lossy().to_string())
+        } else {
+            None
+        }
+    });
 
     let mut dirs: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&path) {

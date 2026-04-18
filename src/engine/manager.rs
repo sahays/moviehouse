@@ -148,22 +148,94 @@ impl SessionManager {
                 {
                     let download_dir = record.output_dir.join(&record.name);
                     let video_files = crate::engine::library::detect_video_files(&download_dir);
-                    let group_id = if video_files.len() > 1 {
-                        Some(Uuid::new_v4())
-                    } else {
-                        None
-                    };
                     let settings = store.get_settings();
 
-                    let mut media_ids: Vec<Uuid> = Vec::new();
+                    // Build existing-paths set to avoid duplicates
+                    let existing_paths: std::collections::HashSet<std::path::PathBuf> = store
+                        .list_media()
+                        .unwrap_or_default()
+                        .iter()
+                        .flat_map(|e| {
+                            let mut paths = vec![e.media_file.clone()];
+                            paths.extend(e.versions.values().cloned());
+                            if let Some(ref tp) = e.transcoded_path {
+                                paths.push(tp.clone());
+                            }
+                            paths
+                        })
+                        .collect();
+
+                    // Collect show and movie groups before creating entries
+                    let mut show_groups: std::collections::HashMap<String, Vec<usize>> =
+                        std::collections::HashMap::new();
+                    let mut movie_groups: std::collections::HashMap<std::path::PathBuf, Vec<usize>> =
+                        std::collections::HashMap::new();
+                    let mut file_infos: Vec<(
+                        std::path::PathBuf,
+                        crate::engine::library::EpisodeInfo,
+                        String,
+                        Option<u16>,
+                    )> = Vec::new();
 
                     for video_file in &video_files {
+                        if existing_paths.contains(video_file) {
+                            continue;
+                        }
                         let filename = video_file
                             .file_stem()
                             .and_then(|s| s.to_str())
                             .unwrap_or(&record.name);
                         let episode_info = crate::engine::library::parse_episode_info(filename);
                         let (title, year) = crate::engine::library::parse_media_title(filename);
+
+                        if episode_info.is_show {
+                            show_groups
+                                .entry(episode_info.show_name.clone())
+                                .or_default()
+                                .push(file_infos.len());
+                        } else {
+                            let dir = video_file
+                                .parent()
+                                .unwrap_or(std::path::Path::new("."))
+                                .to_path_buf();
+                            movie_groups
+                                .entry(dir)
+                                .or_default()
+                                .push(file_infos.len());
+                        }
+                        file_infos.push((video_file.clone(), episode_info, title, year));
+                    }
+
+                    // Assign group_ids for shows
+                    let mut show_group_map: std::collections::HashMap<String, Uuid> =
+                        std::collections::HashMap::new();
+                    for show_name in show_groups.keys() {
+                        show_group_map.insert(show_name.clone(), Uuid::new_v4());
+                    }
+
+                    // Assign group_ids for movie dirs with multiple files
+                    let mut movie_group_map: std::collections::HashMap<std::path::PathBuf, Uuid> =
+                        std::collections::HashMap::new();
+                    for (dir, indices) in &movie_groups {
+                        if indices.len() > 1 {
+                            movie_group_map.insert(dir.clone(), Uuid::new_v4());
+                        }
+                    }
+
+                    let mut media_ids: Vec<Uuid> = Vec::new();
+
+                    for (video_file, episode_info, title, year) in &file_infos {
+                        let show_gid = if episode_info.is_show {
+                            show_group_map.get(&episode_info.show_name).copied()
+                        } else {
+                            None
+                        };
+                        let movie_dir = video_file
+                            .parent()
+                            .unwrap_or(std::path::Path::new("."))
+                            .to_path_buf();
+                        let movie_gid = movie_group_map.get(&movie_dir).copied();
+
                         let is_web = crate::engine::library::is_web_compatible(video_file);
 
                         let media_type = if episode_info.is_show {
@@ -188,7 +260,7 @@ impl SessionManager {
                             } else {
                                 title.clone()
                             },
-                            year,
+                            year: *year,
                             media_type,
                             original_path: download_dir.clone(),
                             media_file: video_file.clone(),
@@ -211,13 +283,15 @@ impl SessionManager {
                             versions: std::collections::HashMap::new(),
                             show_name: if episode_info.is_show {
                                 Some(episode_info.show_name.clone())
+                            } else if movie_gid.is_some() {
+                                Some(title.clone())
                             } else {
                                 None
                             },
                             season: episode_info.season,
                             episode: episode_info.episode,
-                            episode_title: episode_info.episode_title,
-                            group_id,
+                            episode_title: episode_info.episode_title.clone(),
+                            group_id: show_gid.or(movie_gid),
                             tmdb_id: None,
                             subtitles: crate::engine::library::detect_subtitle_files(video_file),
                             last_played_at: None,
@@ -237,7 +311,7 @@ impl SessionManager {
                             && let Some(ref tc) = transcode_for_hook
                         {
                             let job =
-                                crate::transcode::job::create_job(&entry, &settings.default_preset);
+                                crate::transcode::job::create_job(&entry, &settings.default_preset, &settings.transcode_dir);
                             let tc = tc.clone();
                             tokio::spawn(async move {
                                 tc.submit(job).await;
@@ -274,7 +348,6 @@ impl SessionManager {
                         let search_year = parsed_year;
 
                         let store_for_tmdb = store.clone();
-                        let _ = group_id;
                         tokio::spawn(async move {
                             let settings = store_for_tmdb.get_settings();
                             if settings.tmdb_api_key.is_empty() {
