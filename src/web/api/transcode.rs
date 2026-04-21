@@ -99,7 +99,11 @@ pub async fn transcode_all(
     let mut queued = 0u32;
 
     for entry in &group_entries {
-        let job = crate::transcode::job::create_job(entry, &settings.default_preset, &settings.transcode_dir);
+        let job = crate::transcode::job::create_job(
+            entry,
+            &settings.default_preset,
+            &settings.transcode_dir,
+        );
 
         // Reset state to Pending before queueing
         let _ = state

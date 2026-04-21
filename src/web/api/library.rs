@@ -53,6 +53,28 @@ pub async fn delete_library_item(
     StatusCode::NO_CONTENT
 }
 
+/// Check how many media files are accessible on disk.
+pub async fn library_health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let entries = state.store.list_media().unwrap_or_default();
+    let total = entries.len();
+    let mut missing = 0u32;
+    for e in &entries {
+        // Check the best playable path (versions first, then media_file)
+        let playable = e
+            .versions
+            .values()
+            .any(|p| p.exists())
+            || e.media_file.exists();
+        if !playable {
+            missing += 1;
+        }
+    }
+    Json(serde_json::json!({
+        "total": total,
+        "missing": missing,
+    }))
+}
+
 /// Fix `media_file` paths that point to missing files by using the best available version.
 pub async fn fix_paths(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let entries = state.store.list_media().unwrap_or_default();
@@ -433,9 +455,10 @@ pub async fn scan_folder(
         Option<u16>,
     )> = Vec::new();
 
-    // Track movie directories for grouping multi-file movies
-    let mut movie_groups: std::collections::HashMap<std::path::PathBuf, Vec<usize>> =
-        std::collections::HashMap::new();
+    // For movies (non-shows), only keep the largest file per directory
+    // (skips featurettes, extras, etc.). Files are already sorted largest-first.
+    let mut movie_dirs_seen: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
 
     for video_file in &video_files {
         // Skip files already in the library
@@ -457,11 +480,15 @@ pub async fn scan_folder(
                 .or_default()
                 .push(file_infos.len());
         } else {
+            // Skip if we already have a (larger) file from this directory
             let dir = video_file
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
                 .to_path_buf();
-            movie_groups.entry(dir).or_default().push(file_infos.len());
+            if !movie_dirs_seen.insert(dir) {
+                skipped += 1;
+                continue;
+            }
         }
 
         file_infos.push((video_file.clone(), episode_info, title, year));
@@ -476,20 +503,6 @@ pub async fn scan_folder(
             existing_entries.get(path).and_then(|e| e.group_id)
         });
         group_map.insert(show_name.clone(), existing_gid.unwrap_or_else(Uuid::new_v4));
-    }
-
-    // Assign group_ids for movie directories with multiple files (extras/featurettes)
-    let mut movie_group_map: std::collections::HashMap<std::path::PathBuf, Uuid> =
-        std::collections::HashMap::new();
-    for (dir, indices) in &movie_groups {
-        if indices.len() > 1 {
-            // Check if any existing entry in this dir already has a group_id
-            let existing_gid = indices.iter().find_map(|&i| {
-                let path = &file_infos[i].0;
-                existing_entries.get(path).and_then(|e| e.group_id)
-            });
-            movie_group_map.insert(dir.clone(), existing_gid.unwrap_or_else(Uuid::new_v4));
-        }
     }
 
     // Track media_ids per show for group TMDB fetch
@@ -532,14 +545,10 @@ pub async fn scan_folder(
             crate::engine::library::TranscodeState::Unavailable
         };
 
-        let movie_dir = video_file
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .to_path_buf();
         let group_id = if episode_info.is_show {
             group_map.get(&episode_info.show_name).copied()
         } else {
-            movie_group_map.get(&movie_dir).copied()
+            None
         };
 
         let media_id = Uuid::new_v4();
@@ -573,8 +582,6 @@ pub async fn scan_folder(
             versions: std::collections::HashMap::new(),
             show_name: if episode_info.is_show {
                 Some(episode_info.show_name.clone())
-            } else if group_id.is_some() {
-                Some(title.clone()) // grouped movie — use title for frontend grouping
             } else {
                 None
             },

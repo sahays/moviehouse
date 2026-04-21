@@ -168,8 +168,8 @@ impl SessionManager {
                     // Collect show and movie groups before creating entries
                     let mut show_groups: std::collections::HashMap<String, Vec<usize>> =
                         std::collections::HashMap::new();
-                    let mut movie_groups: std::collections::HashMap<std::path::PathBuf, Vec<usize>> =
-                        std::collections::HashMap::new();
+                    let mut movie_dirs_seen: std::collections::HashSet<std::path::PathBuf> =
+                        std::collections::HashSet::new();
                     let mut file_infos: Vec<(
                         std::path::PathBuf,
                         crate::engine::library::EpisodeInfo,
@@ -194,14 +194,14 @@ impl SessionManager {
                                 .or_default()
                                 .push(file_infos.len());
                         } else {
+                            // For movies: only keep the largest file per directory
                             let dir = video_file
                                 .parent()
                                 .unwrap_or(std::path::Path::new("."))
                                 .to_path_buf();
-                            movie_groups
-                                .entry(dir)
-                                .or_default()
-                                .push(file_infos.len());
+                            if !movie_dirs_seen.insert(dir) {
+                                continue;
+                            }
                         }
                         file_infos.push((video_file.clone(), episode_info, title, year));
                     }
@@ -213,28 +213,14 @@ impl SessionManager {
                         show_group_map.insert(show_name.clone(), Uuid::new_v4());
                     }
 
-                    // Assign group_ids for movie dirs with multiple files
-                    let mut movie_group_map: std::collections::HashMap<std::path::PathBuf, Uuid> =
-                        std::collections::HashMap::new();
-                    for (dir, indices) in &movie_groups {
-                        if indices.len() > 1 {
-                            movie_group_map.insert(dir.clone(), Uuid::new_v4());
-                        }
-                    }
-
                     let mut media_ids: Vec<Uuid> = Vec::new();
 
                     for (video_file, episode_info, title, year) in &file_infos {
-                        let show_gid = if episode_info.is_show {
+                        let group_id = if episode_info.is_show {
                             show_group_map.get(&episode_info.show_name).copied()
                         } else {
                             None
                         };
-                        let movie_dir = video_file
-                            .parent()
-                            .unwrap_or(std::path::Path::new("."))
-                            .to_path_buf();
-                        let movie_gid = movie_group_map.get(&movie_dir).copied();
 
                         let is_web = crate::engine::library::is_web_compatible(video_file);
 
@@ -283,15 +269,13 @@ impl SessionManager {
                             versions: std::collections::HashMap::new(),
                             show_name: if episode_info.is_show {
                                 Some(episode_info.show_name.clone())
-                            } else if movie_gid.is_some() {
-                                Some(title.clone())
                             } else {
                                 None
                             },
                             season: episode_info.season,
                             episode: episode_info.episode,
                             episode_title: episode_info.episode_title.clone(),
-                            group_id: show_gid.or(movie_gid),
+                            group_id,
                             tmdb_id: None,
                             subtitles: crate::engine::library::detect_subtitle_files(video_file),
                             last_played_at: None,
@@ -310,8 +294,11 @@ impl SessionManager {
                             )
                             && let Some(ref tc) = transcode_for_hook
                         {
-                            let job =
-                                crate::transcode::job::create_job(&entry, &settings.default_preset, &settings.transcode_dir);
+                            let job = crate::transcode::job::create_job(
+                                &entry,
+                                &settings.default_preset,
+                                &settings.transcode_dir,
+                            );
                             let tc = tc.clone();
                             tokio::spawn(async move {
                                 tc.submit(job).await;

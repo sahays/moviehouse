@@ -37,6 +37,10 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         .route("/api/v1/ws", axum::routing::get(super::ws::ws_handler))
         .route("/api/v1/library", axum::routing::get(library::list_library))
         .route(
+            "/api/v1/library/health",
+            axum::routing::get(library::library_health),
+        )
+        .route(
             "/api/v1/library/{id}",
             axum::routing::get(library::get_library_item).delete(library::delete_library_item),
         )

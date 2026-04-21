@@ -1,5 +1,13 @@
-import { useMemo, useState } from "react";
-import { ChevronLeft, Tv, Film, Wand2, RotateCcw, Play } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ChevronLeft,
+  Tv,
+  Film,
+  Wand2,
+  RotateCcw,
+  Play,
+  AlertTriangle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { MediaEntry, MediaGroup } from "../types";
 import { MediaCard } from "./MediaCard";
@@ -70,6 +78,19 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
   const seasonEpisodes = selectedShow
     ? selectedShow.entries.filter((ep) => ep.season === activeSeason)
     : [];
+
+  const [missingFiles, setMissingFiles] = useState(0);
+
+  const checkHealth = useCallback(() => {
+    fetch("/api/v1/library/health")
+      .then((r) => r.json())
+      .then((data: { missing: number }) => setMissingFiles(data.missing ?? 0))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (library.length > 0) checkHealth();
+  }, [library.length, checkHealth]);
 
   const handleDelete = async (id: string) => {
     await fetch(`/api/v1/library/${id}`, { method: "DELETE" });
@@ -209,6 +230,17 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
   // Main library: show cards (clickable) + movie cards
   return (
     <>
+      {missingFiles > 0 && (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm">
+          <AlertTriangle size={18} className="shrink-0" />
+          <span>
+            {missingFiles} of {library.length} media file
+            {missingFiles > 1 ? "s are" : " is"} not accessible. Did you
+            disconnect an external drive?
+          </span>
+        </div>
+      )}
+
       {continueWatching.length > 0 && (
         <div className="mb-6">
           <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3 flex items-center gap-2">

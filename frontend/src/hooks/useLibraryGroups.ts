@@ -7,7 +7,7 @@ export function useLibraryGroups(library: MediaEntry[]) {
     const standalone: MediaEntry[] = [];
 
     for (const entry of library) {
-      if (entry.group_id) {
+      if (entry.group_id && entry.show_name) {
         const existing = groupMap.get(entry.group_id) ?? [];
         existing.push(entry);
         groupMap.set(entry.group_id, existing);

@@ -281,10 +281,7 @@ impl TranscodeRunner {
                                     entry.subtitles = sub_tracks;
                                     let _ = store.put_media(&entry);
                                 }
-                                eprintln!(
-                                    "Extracted subtitles for: {}",
-                                    job.output_path.display()
-                                );
+                                eprintln!("Extracted subtitles for: {}", job.output_path.display());
                             }
                         }
 
