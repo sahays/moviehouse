@@ -30,3 +30,13 @@ export async function login(code: string): Promise<boolean> {
   });
   return res.ok;
 }
+
+export async function logout(): Promise<void> {
+  try {
+    await fetch("/api/v1/auth/logout", { method: "POST" });
+  } finally {
+    // Clears the session cookie server-side; broadcast so the app returns to
+    // the login screen (the App gate listens for this event).
+    window.dispatchEvent(new CustomEvent("mh-unauthorized"));
+  }
+}
