@@ -19,6 +19,7 @@ pub struct AppState {
     pub manager: Arc<SessionManager>,
     pub store: Arc<Store>,
     pub transcode: TranscodeHandle,
+    pub access_code: String,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -128,16 +129,30 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             "/api/v1/library/groups/{id}/refresh-metadata",
             axum::routing::post(library::refresh_group_metadata),
         )
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .route_layer(axum::middleware::from_fn_with_state(
+            super::auth::AuthState {
+                access_code: state.access_code.clone().into(),
+            },
+            super::auth::require_auth,
+        ));
+
+    let auth_state = super::auth::AuthState {
+        access_code: state.access_code.clone().into(),
+    };
 
     // CORS: allow any origin for LAN access (phones, TVs, other devices).
     // Credentials are not allowed (no .allow_credentials), limiting CSRF risk.
-    Router::new().merge(api).fallback(static_handler).layer(
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([header::CONTENT_TYPE]),
-    )
+    Router::new()
+        .merge(super::auth::auth_router(auth_state))
+        .merge(api)
+        .fallback(static_handler)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                .allow_headers([header::CONTENT_TYPE]),
+        )
 }
 
 async fn static_handler(uri: Uri) -> Response {

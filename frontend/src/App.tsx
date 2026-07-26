@@ -11,7 +11,9 @@ import { Sidebar } from "./components/Sidebar";
 import { BottomNav } from "./components/BottomNav";
 import { FfmpegBanner } from "./components/FfmpegBanner";
 import { Logo } from "./components/Logo";
+import { Login } from "./components/Login";
 import { SettingsProvider } from "./contexts/SettingsContext";
+import { apiFetch, checkAuth } from "./lib/api";
 import type { MediaEntry } from "./types";
 
 type View = "library" | "downloads" | "settings";
@@ -36,7 +38,7 @@ function ErrorFallback({ error }: { error: unknown }) {
   );
 }
 
-function App() {
+function AppInner() {
   const { torrents, addTorrent } = useWebSocket();
   const [view, setView] = useState<View>("library");
   const [library, setLibrary] = useState<MediaEntry[]>([]);
@@ -44,7 +46,7 @@ function App() {
 
   useEffect(() => {
     const fetchLibrary = () => {
-      fetch("/api/v1/library")
+      apiFetch("/api/v1/library")
         .then((r) => r.json())
         .then((data: unknown) => {
           if (Array.isArray(data)) setLibrary(data);
@@ -115,4 +117,17 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  const [authed, setAuthed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    checkAuth().then(setAuthed);
+    const onUnauth = () => setAuthed(false);
+    window.addEventListener("mh-unauthorized", onUnauth);
+    return () => window.removeEventListener("mh-unauthorized", onUnauth);
+  }, []);
+
+  if (authed === null) return null; // brief auth check
+  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
+  return <AppInner />;
+}
