@@ -214,6 +214,7 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
         store,
         transcode: transcode_handle,
         access_code: config.access_code.clone(),
+        max_downloads: config.max_downloads,
     });
     let transcode_for_shutdown = state.transcode.clone();
     let router = web::server::create_router(&state);
@@ -307,6 +308,7 @@ struct Config {
     tmdb_api_key: String,
     tmdb_read_access_token: String,
     access_code: String,
+    max_downloads: usize,
 }
 
 /// Precedence: a non-empty env value wins; otherwise the file value.
@@ -348,6 +350,10 @@ impl Config {
                 .unwrap_or_default()
                 .trim()
                 .to_string(),
+            max_downloads: env_or_file("MOVIEHOUSE_MAX_DOWNLOADS", &values)
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(2),
         }
     }
 }

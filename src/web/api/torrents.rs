@@ -60,19 +60,18 @@ pub async fn delete_torrent(
     StatusCode::NO_CONTENT
 }
 
-/// Cap on concurrent in-memory downloads to bound sockets/FDs/disk growth.
-const MAX_CONCURRENT_DOWNLOADS: usize = 50;
-
 #[allow(clippy::too_many_lines)]
 pub async fn add_torrent(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    if state.manager.active_count() >= MAX_CONCURRENT_DOWNLOADS {
+    // Cap concurrent downloads (MOVIEHOUSE_MAX_DOWNLOADS, default 2) to bound
+    // sockets/FDs/disk growth from repeated adds.
+    if state.manager.active_count() >= state.max_downloads {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(ApiError {
-                error: format!("too many active downloads (max {MAX_CONCURRENT_DOWNLOADS})"),
+                error: format!("too many active downloads (max {})", state.max_downloads),
             }),
         )
             .into_response();

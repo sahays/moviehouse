@@ -20,6 +20,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub transcode: TranscodeHandle,
     pub access_code: String,
+    /// Max concurrent downloads (`MOVIEHOUSE_MAX_DOWNLOADS`, default 2).
+    pub max_downloads: usize,
 }
 
 #[allow(clippy::too_many_lines)]
