@@ -44,6 +44,15 @@ pub async fn udp_announce(
         .first()
         .ok_or_else(|| TrackerError::Bencode("no addresses resolved".into()))?;
 
+    // SSRF guard: refuse trackers that resolve to non-public addresses
+    // (loopback, RFC1918, 169.254 metadata, CGNAT, ...) — otherwise a magnet/
+    // .torrent could aim UDP probes at internal hosts.
+    if !super::http::is_global_ip(&tracker_addr.ip()) {
+        return Err(TrackerError::TrackerFailure(
+            "tracker resolves to a non-public address (blocked)".into(),
+        ));
+    }
+
     // Bind a local UDP socket
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await

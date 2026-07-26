@@ -1,9 +1,59 @@
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use tracing::debug;
 
 use crate::bencode;
 use crate::torrent::types::{InfoHash, PeerId};
+
+/// True only for globally-routable addresses. Rejects loopback, RFC1918 private,
+/// link-local (incl. 169.254.169.254 cloud metadata), CGNAT (100.64/10),
+/// multicast, unspecified, and broadcast — the SSRF-relevant ranges.
+pub fn is_global_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || (o[0] == 100 && (o[1] & 0xc0) == 64))
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_global_ip(&IpAddr::V4(v4));
+            }
+            let seg0 = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+                || (seg0 & 0xfe00) == 0xfc00
+                || (seg0 & 0xffc0) == 0xfe80)
+        }
+    }
+}
+
+/// Resolve `host:port` and confirm EVERY resolved address is globally routable,
+/// returning one to dial. Blocks SSRF to internal/metadata/loopback targets.
+pub async fn resolve_public_addr(host: &str, port: u16) -> Result<SocketAddr, TrackerError> {
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| TrackerError::TrackerFailure(format!("DNS resolution failed: {e}")))?
+        .collect();
+    if addrs.is_empty() {
+        return Err(TrackerError::TrackerFailure("no addresses resolved".into()));
+    }
+    for addr in &addrs {
+        if !is_global_ip(&addr.ip()) {
+            return Err(TrackerError::TrackerFailure(
+                "tracker resolves to a non-public address (blocked)".into(),
+            ));
+        }
+    }
+    Ok(addrs[0])
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrackerError {
@@ -44,8 +94,20 @@ pub async fn http_announce(
 ) -> Result<AnnounceResponse, TrackerError> {
     const MAX_RESPONSE_SIZE: u64 = 1_048_576; // 1 MiB
 
+    // SSRF guard: resolve the tracker host, refuse non-public addresses, pin the
+    // client to the validated IP (so DNS can't rebind), and disable redirects.
+    let parsed = url::Url::parse(tracker_url)
+        .map_err(|e| TrackerError::TrackerFailure(format!("invalid tracker URL: {e}")))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| TrackerError::TrackerFailure("tracker URL missing host".into()))?;
+    let host_port = parsed.port_or_known_default().unwrap_or(80);
+    let addr = resolve_public_addr(host, host_port).await?;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(host, addr)
         .build()?;
 
     // Build the announce URL with query parameters.
@@ -81,16 +143,12 @@ pub async fn http_announce(
     }
 
     if !status.is_success() {
-        let preview = String::from_utf8_lossy(&body[..body.len().min(200)]);
-        return Err(TrackerError::TrackerFailure(format!(
-            "HTTP {status}: {preview}"
-        )));
+        // Do not echo the response body into errors/logs (it can carry
+        // attacker/SSRF-controlled content).
+        return Err(TrackerError::TrackerFailure(format!("HTTP {status}")));
     }
 
-    let val = bencode::decode(&body).map_err(|e| {
-        let preview = String::from_utf8_lossy(&body[..body.len().min(200)]);
-        TrackerError::Bencode(format!("{e} (response: {preview})"))
-    })?;
+    let val = bencode::decode(&body).map_err(|e| TrackerError::Bencode(e.to_string()))?;
 
     // Check for failure
     if let Some(failure) = val.get_str("failure reason")
@@ -178,4 +236,39 @@ fn parse_dict_peers(peers: &[bencode::BValue]) -> Vec<SocketAddr> {
 fn percent_encode_bytes(bytes: &[u8]) -> String {
     use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
     percent_encode(bytes, NON_ALPHANUMERIC).to_string()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod ssrf_tests {
+    use super::is_global_ip;
+    use std::net::IpAddr;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn blocks_ssrf_ranges() {
+        for s in [
+            "127.0.0.1",       // loopback
+            "10.0.0.5",        // private
+            "192.168.1.1",     // private
+            "172.16.0.1",      // private
+            "169.254.169.254", // cloud metadata (link-local)
+            "100.64.0.1",      // CGNAT
+            "0.0.0.0",         // unspecified
+            "::1",             // v6 loopback
+            "fd00::1",         // v6 unique-local
+        ] {
+            assert!(!is_global_ip(&ip(s)), "{s} must be blocked");
+        }
+    }
+
+    #[test]
+    fn allows_public() {
+        for s in ["1.1.1.1", "8.8.8.8", "93.184.216.34", "2606:4700:4700::1111"] {
+            assert!(is_global_ip(&ip(s)), "{s} must be allowed");
+        }
+    }
 }
