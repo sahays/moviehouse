@@ -82,7 +82,7 @@ mod config_tests {
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Run: `cargo test --lib config_tests 2>&1 | tail -20` (or `cargo test config_tests`)
+Run: `cargo test config_tests 2>&1 | tail -20` (or `cargo test config_tests`)
 Expected: FAIL — `pick` not found / does not compile.
 
 - [ ] **Step 4: Implement `env_or_file` and rewrite `Config`**
@@ -245,10 +245,15 @@ mod tests {
 
     #[test]
     fn tampered_token_rejected() {
-        let mut t = mint_token(CODE, NOW);
-        t.pop();
-        t.push('0');
-        assert!(!verify_token(&t, CODE, NOW + 10));
+        let t = mint_token(CODE, NOW);
+        // Flip the final hex char to a GUARANTEED-different one. (pop+push the
+        // same literal char is a no-op when the signature already ends in it.)
+        let mut chars: Vec<char> = t.chars().collect();
+        if let Some(last) = chars.last_mut() {
+            *last = if *last == '0' { '1' } else { '0' };
+        }
+        let tampered: String = chars.into_iter().collect();
+        assert!(!verify_token(&tampered, CODE, NOW + 10));
     }
 
     #[test]
@@ -299,7 +304,7 @@ mod tests {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cargo test --lib web::auth 2>&1 | tail -20`
+Run: `cargo test web::auth 2>&1 | tail -20`
 Expected: FAIL — functions/constants not defined (compile error).
 
 - [ ] **Step 4: Implement the module**
@@ -406,12 +411,12 @@ Note: `code_matches` with `ct_eq` returns false for differing lengths (`subtle`'
 
 - [ ] **Step 5: Run tests — verify they pass**
 
-Run: `cargo test --lib web::auth 2>&1 | tail -20`
+Run: `cargo test web::auth 2>&1 | tail -20`
 Expected: PASS (all auth tests).
 
 - [ ] **Step 6: Clippy-clean the new module**
 
-Run: `cargo clippy --lib 2>&1 | tail -20`
+Run: `cargo clippy --all-targets 2>&1 | tail -20`
 Expected: no warnings for `src/web/auth.rs`. If `expect_used`/`cast_possible_truncation` fire, add a scoped `#[allow(...)]` with a one-line justification comment (the `now_unix` cast and the HMAC `expect` are the likely spots).
 
 - [ ] **Step 7: Commit**
@@ -516,7 +521,7 @@ mod router_tests {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test --lib web::auth::router_tests 2>&1 | tail -20`
+Run: `cargo test web::auth::router_tests 2>&1 | tail -20`
 Expected: FAIL — `AuthState` / `auth_router` not defined.
 
 - [ ] **Step 3: Implement `AuthState`, handlers, and `auth_router`**
@@ -636,7 +641,7 @@ In `src/web/server.rs`, at the start of `create_router` add the auth state, and 
 
 - [ ] **Step 5: Run the router tests — verify they pass**
 
-Run: `cargo test --lib web::auth 2>&1 | tail -20`
+Run: `cargo test web::auth 2>&1 | tail -20`
 Expected: PASS (all auth + router tests).
 
 - [ ] **Step 6: Build check**
@@ -708,7 +713,7 @@ Add to the `router_tests` module in `src/web/auth.rs`:
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test --lib web::auth::router_tests 2>&1 | tail -20`
+Run: `cargo test web::auth::router_tests 2>&1 | tail -20`
 Expected: FAIL — `require_auth` not defined.
 
 - [ ] **Step 3: Implement `require_auth`**
@@ -752,7 +757,7 @@ to:
 
 - [ ] **Step 5: Run all auth tests — verify they pass**
 
-Run: `cargo test --lib web::auth 2>&1 | tail -20`
+Run: `cargo test web::auth 2>&1 | tail -20`
 Expected: PASS (pure + router + guard tests).
 
 - [ ] **Step 6: Full test + clippy + build**
