@@ -3,3 +3,5 @@ build_number
 .env
 frontend/node_modules
 frontend/dist
+nginx/conf.d/moviehouse.conf
+*.htpasswd
