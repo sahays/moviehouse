@@ -147,10 +147,17 @@ impl KrpcSocket {
         loop {
             match self.socket.recv_from(&mut buf).await {
                 Ok((n, addr)) => {
-                    let data = &buf[..n];
-                    if let Err(e) = self.handle_message(data, addr).await {
-                        trace!(peer = %addr, error = %e, "Failed to handle KRPC message");
-                    }
+                    // Handle each datagram in its own task so a panic while
+                    // parsing one malformed packet from an untrusted node can
+                    // never take down the whole DHT receive loop (defense in
+                    // depth beyond the checked-arithmetic fix in the decoder).
+                    let data = buf[..n].to_vec();
+                    let this = Arc::clone(&self);
+                    tokio::spawn(async move {
+                        if let Err(e) = this.handle_message(&data, addr).await {
+                            trace!(peer = %addr, error = %e, "Failed to handle KRPC message");
+                        }
+                    });
                 }
                 Err(e) => {
                     warn!(error = %e, "UDP recv error");

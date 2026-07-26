@@ -181,13 +181,19 @@ impl<'a> Decoder<'a> {
                 .ok_or(DecodeError::StringLengthOverflow(start))?;
         }
 
-        // Read exactly `length` bytes
-        if self.pos + length > self.data.len() {
+        // Read exactly `length` bytes. Use checked_add: `self.pos + length` can
+        // overflow usize for an attacker-supplied length near usize::MAX, which
+        // would panic (a trivially-triggered DoS on the untrusted DHT/peer paths).
+        let end = self
+            .pos
+            .checked_add(length)
+            .ok_or(DecodeError::StringLengthOverflow(start))?;
+        if end > self.data.len() {
             return Err(DecodeError::UnexpectedEof(self.pos));
         }
 
-        let bytes = self.data[self.pos..self.pos + length].to_vec();
-        self.pos += length;
+        let bytes = self.data[self.pos..end].to_vec();
+        self.pos = end;
         Ok(BValue::Bytes(bytes))
     }
 
@@ -351,5 +357,15 @@ mod tests {
         data.push(b'e');
         let val = decode(&data).unwrap();
         assert_eq!(val.as_dict().unwrap().len(), 100);
+    }
+
+    #[test]
+    fn test_string_length_near_usize_max_does_not_panic() {
+        // Regression: a length near usize::MAX must not overflow `pos + length`.
+        // Previously this panicked (add-overflow / slice OOB) → trivial DoS on
+        // the untrusted DHT/peer/.torrent decode paths.
+        let input = format!("{}:", usize::MAX);
+        let err = decode(input.as_bytes());
+        assert!(err.is_err(), "huge length must be a clean Err, not a panic");
     }
 }
