@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use hmac::{Hmac, Mac};
@@ -165,6 +166,19 @@ async fn logout() -> Response {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Guard: pass through when a valid session cookie is present, else 401.
+pub async fn require_auth(
+    State(state): State<AuthState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if has_valid_session(request.headers(), &state.access_code) {
+        next.run(request).await
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
 }
 
 /// Public routes: login/status/logout + unguarded health probe.
@@ -333,5 +347,44 @@ mod router_tests {
         assert_eq!(res.status(), StatusCode::OK);
         let set_cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap();
         assert!(set_cookie.starts_with("mh_session="));
+    }
+
+    use axum::middleware;
+    use axum::routing::get as get_route;
+
+    // A tiny protected router mirroring how server.rs wires the guard.
+    fn protected_app() -> Router {
+        async fn dummy() -> &'static str {
+            "secret"
+        }
+        Router::new()
+            .route("/api/v1/dummy", get_route(dummy))
+            .route_layer(middleware::from_fn_with_state(state(), require_auth))
+            .with_state(())
+    }
+
+    #[tokio::test]
+    async fn protected_route_401_without_cookie() {
+        let res = protected_app()
+            .oneshot(Request::builder().uri("/api/v1/dummy").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn protected_route_200_with_valid_cookie() {
+        let token = mint_token("secret-code", now_unix());
+        let res = protected_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/dummy")
+                    .header("cookie", format!("mh_session={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 }
