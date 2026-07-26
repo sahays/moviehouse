@@ -33,7 +33,9 @@
 - Modify: `src/web/server.rs:18-22` (add `access_code` to `AppState`)
 
 **Interfaces:**
-- Produces: `AppState.access_code: String`; `Config.access_code: String`; a testable free function `env_or_file(key, &HashMap<String,String>) -> Option<String>`.
+- Produces: `AppState.access_code: String`; `Config.access_code: String`; a pure `pick(env_val: Option<String>, file_val: Option<String>) -> Option<String>` precedence helper and its `env_or_file(key, &HashMap<String,String>) -> Option<String>` wrapper.
+
+> **Lint note:** `Cargo.toml` sets `unsafe_code = "forbid"`, so tests must NOT call `std::env::set_var` (it is `unsafe` in edition 2024 and `forbid` cannot be locally allowed). The precedence logic is therefore tested via the pure `pick` helper, not by mutating the process environment.
 
 - [ ] **Step 1: Add dependencies to `Cargo.toml`**
 
@@ -52,30 +54,28 @@ Add to `src/main.rs` (bottom of file):
 ```rust
 #[cfg(test)]
 mod config_tests {
-    use super::env_or_file;
-    use std::collections::HashMap;
+    use super::pick;
 
     #[test]
-    fn env_var_takes_precedence_over_file() {
-        let mut file = HashMap::new();
-        file.insert("MH_TEST_KEY".to_string(), "from_file".to_string());
-        // SAFETY: single-threaded test; sets then reads its own unique key.
-        unsafe { std::env::set_var("MH_TEST_KEY", "from_env") };
-        assert_eq!(env_or_file("MH_TEST_KEY", &file).as_deref(), Some("from_env"));
-        unsafe { std::env::remove_var("MH_TEST_KEY") };
+    fn env_value_wins_when_present() {
+        assert_eq!(pick(Some("env".into()), Some("file".into())).as_deref(), Some("env"));
+        assert_eq!(pick(Some("env".into()), None).as_deref(), Some("env"));
     }
 
     #[test]
-    fn falls_back_to_file_when_env_absent() {
-        let mut file = HashMap::new();
-        file.insert("MH_TEST_KEY2".to_string(), "from_file".to_string());
-        assert_eq!(env_or_file("MH_TEST_KEY2", &file).as_deref(), Some("from_file"));
+    fn empty_env_falls_back_to_file() {
+        assert_eq!(pick(Some(String::new()), Some("file".into())).as_deref(), Some("file"));
     }
 
     #[test]
-    fn none_when_absent_everywhere() {
-        let file = HashMap::new();
-        assert_eq!(env_or_file("MH_MISSING_KEY", &file), None);
+    fn file_used_when_env_absent() {
+        assert_eq!(pick(None, Some("file".into())).as_deref(), Some("file"));
+    }
+
+    #[test]
+    fn none_when_both_absent() {
+        assert_eq!(pick(None, None), None);
+        assert_eq!(pick(Some(String::new()), None), None);
     }
 }
 ```
@@ -83,7 +83,7 @@ mod config_tests {
 - [ ] **Step 3: Run the test to verify it fails**
 
 Run: `cargo test --lib config_tests 2>&1 | tail -20` (or `cargo test config_tests`)
-Expected: FAIL — `env_or_file` not found / does not compile.
+Expected: FAIL — `pick` not found / does not compile.
 
 - [ ] **Step 4: Implement `env_or_file` and rewrite `Config`**
 
@@ -97,16 +97,21 @@ struct Config {
     access_code: String,
 }
 
+/// Precedence: a non-empty env value wins; otherwise the file value.
+/// Pure (no env access) so it is testable without mutating the process
+/// environment (which `unsafe_code = "forbid"` disallows).
+fn pick(env_val: Option<String>, file_val: Option<String>) -> Option<String> {
+    match env_val {
+        Some(v) if !v.is_empty() => Some(v),
+        _ => file_val,
+    }
+}
+
 /// Resolve a key: process environment wins, then the parsed `.env` map.
 /// (The Docker container receives values as process env via compose `env_file`;
 /// local runs use the `.env` file. Both must work.)
 fn env_or_file(key: &str, file: &std::collections::HashMap<String, String>) -> Option<String> {
-    if let Ok(v) = std::env::var(key) {
-        if !v.is_empty() {
-            return Some(v);
-        }
-    }
-    file.get(key).cloned()
+    pick(std::env::var(key).ok(), file.get(key).cloned())
 }
 
 impl Config {
@@ -323,9 +328,14 @@ pub fn now_unix() -> i64 {
 }
 
 /// HMAC-SHA256(key = access_code, msg) → lowercase hex.
+/// `new_from_slice` only errors for key-length limits HMAC does not impose, so
+/// the error branch is unreachable; return `""` there to stay `unwrap`/`expect`
+/// free (the repo denies `unwrap_used`/`expect_used`). An empty signature never
+/// verifies, so this is fail-closed.
 fn sign(access_code: &str, msg: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(access_code.as_bytes())
-        .expect("HMAC accepts any key length");
+    let Ok(mut mac) = HmacSha256::new_from_slice(access_code.as_bytes()) else {
+        return String::new();
+    };
     mac.update(msg.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
@@ -392,7 +402,7 @@ pub fn token_from_cookie_header(header: &str) -> Option<&str> {
 }
 ```
 
-Note: `code_matches` with `ct_eq` returns false for differing lengths (ct_eq is defined on equal-length slices via `subtle`'s slice impl, which returns 0 when lengths differ). If clippy flags the `.expect` in `sign`, that is acceptable here (HMAC construction cannot fail for byte keys) — but if the repo's `expect_used` lint denies it, replace with `let Ok(mut mac) = HmacSha256::new_from_slice(...) else { return String::new() };` and adjust `sign` to return `Option<String>` is overkill; instead use `.unwrap_or_else(|_| unreachable!())`? Prefer: keep `.expect` and add `#[allow(clippy::expect_used)]` on the `sign` fn if the lint fires.
+Note: `code_matches` with `ct_eq` returns false for differing lengths (`subtle`'s slice impl returns `Choice(0)` when lengths differ). The `now_unix` `as i64` cast is covered by the repo's `cast_possible_truncation = "allow"`. `sign` is written `unwrap`/`expect`-free (see its doc comment) to satisfy the `unwrap_used`/`expect_used` deny.
 
 - [ ] **Step 5: Run tests — verify they pass**
 
