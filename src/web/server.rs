@@ -19,6 +19,7 @@ pub struct AppState {
     pub manager: Arc<SessionManager>,
     pub store: Arc<Store>,
     pub transcode: TranscodeHandle,
+    pub access_code: String,
 }
 
 #[allow(clippy::too_many_lines)]

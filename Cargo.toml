@@ -1,6 +1,6 @@
 [package]
 name = "moviehouse"
-version = "3.0.36"
+version = "3.0.55"
 edition = "2024"
 
 [dependencies]
@@ -36,6 +36,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 sled = "0.34"
 bincode = "1"
 dirs = "6"
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2"
 
 [lints.rust]
 unsafe_code = "forbid"

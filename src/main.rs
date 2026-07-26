@@ -179,6 +179,12 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
     };
 
     let config = Config::load();
+    if config.access_code.trim().is_empty() {
+        anyhow::bail!(
+            "MOVIEHOUSE_ACCESS_CODE is required to serve the web UI. \
+             Set it in .env or the environment (generate one: openssl rand -hex 24)."
+        );
+    }
     let store = Arc::new(engine::store::Store::open()?);
     // Seed TMDB key from .env into settings if not already set
     {
@@ -201,6 +207,7 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
         manager,
         store,
         transcode: transcode_handle,
+        access_code: config.access_code.clone(),
     });
     let transcode_for_shutdown = state.transcode.clone();
     let router = web::server::create_router(&state);
@@ -289,10 +296,28 @@ fn cmd_info(path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// App configuration loaded from .env file.
+/// App configuration resolved from process env first, then the `.env` file.
 struct Config {
     tmdb_api_key: String,
     tmdb_read_access_token: String,
+    access_code: String,
+}
+
+/// Precedence: a non-empty env value wins; otherwise the file value.
+/// Pure (no env access) so it is testable without mutating the process
+/// environment (which `unsafe_code = "forbid"` disallows).
+fn pick(env_val: Option<String>, file_val: Option<String>) -> Option<String> {
+    match env_val {
+        Some(v) if !v.is_empty() => Some(v),
+        _ => file_val,
+    }
+}
+
+/// Resolve a key: process environment wins, then the parsed `.env` map.
+/// (The Docker container receives values as process env via compose `env_file`;
+/// local runs use the `.env` file. Both must work.)
+fn env_or_file(key: &str, file: &std::collections::HashMap<String, String>) -> Option<String> {
+    pick(std::env::var(key).ok(), file.get(key).cloned())
 }
 
 impl Config {
@@ -310,8 +335,37 @@ impl Config {
             }
         }
         Self {
-            tmdb_api_key: values.remove("TMDB_API_KEY").unwrap_or_default(),
-            tmdb_read_access_token: values.remove("TMDB_READ_ACCESS_TOKEN").unwrap_or_default(),
+            tmdb_api_key: env_or_file("TMDB_API_KEY", &values).unwrap_or_default(),
+            tmdb_read_access_token: env_or_file("TMDB_READ_ACCESS_TOKEN", &values)
+                .unwrap_or_default(),
+            access_code: env_or_file("MOVIEHOUSE_ACCESS_CODE", &values).unwrap_or_default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::pick;
+
+    #[test]
+    fn env_value_wins_when_present() {
+        assert_eq!(pick(Some("env".into()), Some("file".into())).as_deref(), Some("env"));
+        assert_eq!(pick(Some("env".into()), None).as_deref(), Some("env"));
+    }
+
+    #[test]
+    fn empty_env_falls_back_to_file() {
+        assert_eq!(pick(Some(String::new()), Some("file".into())).as_deref(), Some("file"));
+    }
+
+    #[test]
+    fn file_used_when_env_absent() {
+        assert_eq!(pick(None, Some("file".into())).as_deref(), Some("file"));
+    }
+
+    #[test]
+    fn none_when_both_absent() {
+        assert_eq!(pick(None, None), None);
+        assert_eq!(pick(Some(String::new()), None), None);
     }
 }
