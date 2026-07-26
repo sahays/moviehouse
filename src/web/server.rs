@@ -131,14 +131,22 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         )
         .with_state(state.clone());
 
+    let auth_state = super::auth::AuthState {
+        access_code: state.access_code.clone().into(),
+    };
+
     // CORS: allow any origin for LAN access (phones, TVs, other devices).
     // Credentials are not allowed (no .allow_credentials), limiting CSRF risk.
-    Router::new().merge(api).fallback(static_handler).layer(
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([header::CONTENT_TYPE]),
-    )
+    Router::new()
+        .merge(super::auth::auth_router(auth_state))
+        .merge(api)
+        .fallback(static_handler)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                .allow_headers([header::CONTENT_TYPE]),
+        )
 }
 
 async fn static_handler(uri: Uri) -> Response {

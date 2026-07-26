@@ -1,6 +1,15 @@
 //! Access-code auth: stateless HMAC-signed session cookie.
 
+use std::sync::Arc;
+
+use axum::Json;
+use axum::Router;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use hmac::{Hmac, Mac};
+use serde::Deserialize;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
@@ -97,6 +106,77 @@ pub fn token_from_cookie_header(header: &str) -> Option<&str> {
     })
 }
 
+/// Minimal state for auth handlers/middleware — just the access code.
+/// Decoupled from the heavy `AppState` so it is unit-testable without sled.
+#[derive(Clone)]
+pub struct AuthState {
+    pub access_code: Arc<str>,
+}
+
+#[derive(Deserialize)]
+struct LoginBody {
+    code: String,
+}
+
+/// True when the request reached us over HTTPS (nginx sets X-Forwarded-Proto).
+fn request_is_secure(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+}
+
+/// True when a valid, unexpired session cookie is present.
+fn has_valid_session(headers: &HeaderMap, access_code: &str) -> bool {
+    headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(token_from_cookie_header)
+        .is_some_and(|tok| verify_token(tok, access_code, now_unix()))
+}
+
+async fn login(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Json(body): Json<LoginBody>,
+) -> Response {
+    if !code_matches(&body.code, &state.access_code) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"authenticated": false})))
+            .into_response();
+    }
+    let token = mint_token(&state.access_code, now_unix());
+    let cookie = session_cookie_header(&token, request_is_secure(&headers));
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(serde_json::json!({"authenticated": true})),
+    )
+        .into_response()
+}
+
+async fn status(State(state): State<AuthState>, headers: HeaderMap) -> Response {
+    let ok = has_valid_session(&headers, &state.access_code);
+    Json(serde_json::json!({ "authenticated": ok })).into_response()
+}
+
+async fn logout() -> Response {
+    (StatusCode::OK, [(header::SET_COOKIE, clear_cookie_header())]).into_response()
+}
+
+async fn health() -> &'static str {
+    "ok"
+}
+
+/// Public routes: login/status/logout + unguarded health probe.
+pub fn auth_router(state: AuthState) -> Router {
+    Router::new()
+        .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/status", get(status))
+        .route("/api/v1/auth/logout", post(logout))
+        .route("/health", get(health))
+        .with_state(state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +257,81 @@ mod tests {
         );
         assert_eq!(token_from_cookie_header("foo=1; bar=2"), None);
         assert_eq!(token_from_cookie_header(""), None);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod router_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // oneshot
+
+    fn state() -> AuthState {
+        AuthState { access_code: "secret-code".into() }
+    }
+
+    #[tokio::test]
+    async fn health_is_public_200() {
+        let app = auth_router(state());
+        let res = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn status_false_without_cookie() {
+        let app = auth_router(state());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/auth/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("\"authenticated\":false"));
+    }
+
+    #[tokio::test]
+    async fn login_wrong_code_401() {
+        let app = auth_router(state());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"code":"nope"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_right_code_sets_cookie() {
+        let app = auth_router(state());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"code":"secret-code"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let set_cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap();
+        assert!(set_cookie.starts_with("mh_session="));
     }
 }
