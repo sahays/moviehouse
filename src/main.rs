@@ -338,7 +338,10 @@ impl Config {
             tmdb_api_key: env_or_file("TMDB_API_KEY", &values).unwrap_or_default(),
             tmdb_read_access_token: env_or_file("TMDB_READ_ACCESS_TOKEN", &values)
                 .unwrap_or_default(),
-            access_code: env_or_file("MOVIEHOUSE_ACCESS_CODE", &values).unwrap_or_default(),
+            access_code: env_or_file("MOVIEHOUSE_ACCESS_CODE", &values)
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
         }
     }
 }

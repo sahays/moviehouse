@@ -103,7 +103,8 @@ pub fn clear_cookie_header() -> String {
 pub fn token_from_cookie_header(header: &str) -> Option<&str> {
     header.split(';').find_map(|pair| {
         let pair = pair.trim();
-        pair.strip_prefix(concat!("mh_session", "="))
+        pair.strip_prefix(COOKIE_NAME)
+            .and_then(|rest| rest.strip_prefix('='))
     })
 }
 
@@ -142,6 +143,7 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> Response {
     if !code_matches(&body.code, &state.access_code) {
+        tracing::warn!("access-code login failed");
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"authenticated": false})),
@@ -150,6 +152,7 @@ async fn login(
     }
     let token = mint_token(&state.access_code, now_unix());
     let cookie = session_cookie_header(&token, request_is_secure(&headers));
+    tracing::info!("access-code login succeeded");
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
