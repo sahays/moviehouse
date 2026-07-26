@@ -1,6 +1,6 @@
 [package]
 name = "moviehouse"
-version = "3.0.65"
+version = "3.0.69"
 edition = "2024"
 
 [dependencies]
