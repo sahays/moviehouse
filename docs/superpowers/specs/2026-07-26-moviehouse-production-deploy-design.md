@@ -35,9 +35,9 @@ joins `shared`, generates an nginx vhost from a template, installs it into
 
 ```
 Internet ── 443 ──▶ bharatsc-nginx ──▶ moviehouse-web:9000   (web UI / API / WS / HLS)
-                    (TLS, wildcard cert,
-                     Basic Auth, WS + stream
-                     proxy tuning)
+                    (TLS, wildcard cert,          (in-app access-code auth
+                     login rate-limit,             gates every /api/v1/* route)
+                     WS + stream proxy tuning)
 
 Internet ── 6881 ─▶ moviehouse-web:6881                       (BitTorrent peers, direct)
 ```
@@ -106,7 +106,7 @@ services:
       - "${BT_PORT:-6881}:6881/tcp"
       - "${BT_PORT:-6881}:6881/udp"
     healthcheck:
-      test: ["CMD","sh","-c","curl -sf http://localhost:${WEB_PORT:-9000}/api/v1/library/health"]
+      test: ["CMD","sh","-c","curl -sf http://localhost:${WEB_PORT:-9000}/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -118,8 +118,9 @@ networks:
   shared:   { external: true, name: shared }
 ```
 
-Notes: the healthcheck runs **inside** the container (localhost), so it bypasses
-nginx Basic Auth. Inbound peer connectivity on 6881 also requires the host
+Notes: the healthcheck hits the public, unauthenticated `/health` route (and runs
+inside the container anyway), so it is never blocked by the in-app auth guard.
+Inbound peer connectivity on 6881 also requires the host
 firewall/router to allow it; without it, downloads still work via outbound
 connections and DHT bootstrap (just fewer peers).
 
@@ -131,8 +132,9 @@ Same structure as niniconai's, adapted:
 - Port-443 server for `moviehouse.niniconai.com`, using the **wildcard cert**:
   `ssl_certificate /etc/letsencrypt/live/niniconai.com/fullchain.pem;` (+ key,
   chain), the same TLS hardening block niniconai uses.
-- **Basic Auth** applied at the server level:
-  `auth_basic "MovieHouse"; auth_basic_user_file /etc/nginx/conf.d/moviehouse.htpasswd;`
+- **No nginx Basic Auth** — the app gates itself via the access-code session
+  cookie. nginx only rate-limits login: **`location = /api/v1/auth/login`** with
+  `limit_req zone=auth burst=5 nodelay;` (reuses bharatsc's shared `auth` zone).
 - **`location = /api/v1/ws`** — WebSocket: `proxy_http_version 1.1;`
   `proxy_set_header Upgrade $http_upgrade;` `proxy_set_header Connection "upgrade";`
   long `proxy_read_timeout` (e.g. 3600s). (Uses a static `Connection "upgrade"`
@@ -152,39 +154,37 @@ Same structure as niniconai's, adapted:
 Learned from bharatsc + niniconai; same flags and layout.
 
 - **`build.sh`** — `docker build -t moviehouse:latest .` + size report.
-- **`check-deps.sh`** — docker running, compose plugin, `curl`, `openssl`
-  (for htpasswd generation), `.env` present, `shared` network exists,
-  `${DATA_DIR}` and `${MEDIA_DIR}` exist, and **wildcard cert present** in the
-  `bharatsc_certbot-etc` volume (warn + point to niniconai's `init-ssl.sh` if
-  missing). Colorized pass/fail/warn, non-zero exit on critical failures.
+- **`check-deps.sh`** — docker running, compose plugin, `curl`, `openssl`,
+  `.env` present, **`MOVIEHOUSE_ACCESS_CODE` set** (not `change_me`), `shared`
+  network exists, `${DATA_DIR}` and `${MEDIA_DIR}` exist, and **wildcard cert
+  present** in the `bharatsc_certbot-etc` volume (warn + point to niniconai's
+  `init-ssl.sh` if missing). Colorized pass/fail/warn, non-zero exit on critical
+  failures.
 - **`pre-deploy.sh`** — strict, verify-only (no auto-fix):
   - `cargo fmt --all -- --check`
-  - `cargo clippy --all-targets --all-features --locked -- -D warnings`
-    (with the two documented axum `-A` allows)
-  - `cargo test --locked --no-fail-fast`
-  - `cargo check --locked --all-targets`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test --no-fail-fast`
+  - `cargo check --all-targets`
   - frontend: `(cd frontend && npx prettier --check src && npm run lint)`
-  - Replaces the current auto-formatting `pre-deploy.sh`.
+  - Replaces the current auto-formatting `pre-deploy.sh`. (No `--locked`: build.rs
+    auto-bumps the crate version, which desyncs Cargo.lock and breaks `--locked`.)
 - **`deploy.sh`** — flags `--no-build`, `--foreground|-f`. Steps:
   1. Source `.env`; require it. Resolve `WEB_PORT`, `BHARATSC_DIR`.
   2. Run `check-deps.sh`.
   3. Verify `shared` network (error → "start bharatsc first").
-  4. **Generate/refresh `moviehouse.htpasswd`** from `.env`
-     (`BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD`) via `openssl passwd -apr1`
-     — no `htpasswd` binary dependency.
+  4. **Validate `MOVIEHOUSE_ACCESS_CODE`** is set and not `change_me` (else abort).
   5. `sed s/__PORT__/$WEB_PORT/` template → `nginx/conf.d/moviehouse.conf`.
   6. Build image (unless `--no-build`).
   7. `docker compose up -d` (or foreground).
-  8. Health-check the container (`/api/v1/library/health`), ~40s budget.
-  9. Copy `moviehouse.conf` **and** `moviehouse.htpasswd` into
-     `${BHARATSC_DIR}/nginx/conf.d/`, then `nginx -t` and `nginx -s reload` in
-     the bharatsc nginx container (warn if cert test fails).
+  8. Health-check the container (`/health`), ~40s budget.
+  9. Copy `moviehouse.conf` into `${BHARATSC_DIR}/nginx/conf.d/`, then `nginx -t`
+     and `nginx -s reload` in the bharatsc nginx container (warn if cert test fails).
 
 ### 5. Supporting files
 
 - **`.env.example`** — add: `WEB_PORT=9000`, `BT_PORT=6881`,
   `DATA_DIR=/srv/moviehouse/data`, `MEDIA_DIR=/srv/moviehouse/media`,
-  `DOMAIN=moviehouse.niniconai.com`, `BASIC_AUTH_USER=`, `BASIC_AUTH_PASSWORD=`,
+  `DOMAIN=moviehouse.niniconai.com`, `MOVIEHOUSE_ACCESS_CODE=change_me`,
   `# BHARATSC_DIR=/path/to/bharatsc`. Keep existing `TMDB_API_KEY` /
   `TMDB_READ_ACCESS_TOKEN`. Remove the two unused `MOVIEHOUSE_*_DIR` lines (dead).
 - **`.dockerignore`** — exclude `target`, `frontend/node_modules`,
@@ -194,12 +194,13 @@ Learned from bharatsc + niniconai; same flags and layout.
 
 ## Security notes
 
-- **No app-level auth by design (this iteration).** nginx Basic Auth is the only
-  gate. The credential lives in `.env` (git-ignored) and is materialized into an
-  `htpasswd` file (git-ignored). Anyone with the credential has full control of
-  the torrent engine, file browser, and library — treat it as an admin password.
-- Basic Auth covers the **entire vhost including the API and WS**, so the torrent
-  adder and filesystem browser are not reachable unauthenticated.
+- **Auth is in-app** (see the access-code-auth design spec): a single
+  `MOVIEHOUSE_ACCESS_CODE` gates every `/api/v1/*` route except `/api/v1/auth/*`
+  and `/health`, via an HttpOnly `mh_session` cookie. The code lives in `.env`
+  (git-ignored). Anyone with it has full control of the torrent engine, file
+  browser, and library — treat it as an admin password; rotate it to revoke.
+- The app **refuses to start** without the access code, so an ungated instance
+  cannot be exposed by accident. nginx additionally rate-limits `/api/v1/auth/login`.
 - The BitTorrent port (6881) is intentionally unauthenticated (protocol-level) —
   that is normal and carries no web-app authority.
 - HSTS/security headers come from bharatsc's shared `security_headers.inc`.

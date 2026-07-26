@@ -67,6 +67,37 @@ Or use the install script (builds, launches in background, opens browser):
 ./install.sh
 ```
 
+## Production Deployment
+
+MovieHouse deploys as a satellite of the bharatsc shared Docker stack, served at
+`https://moviehouse.niniconai.com` behind bharatsc's nginx (wildcard TLS). The app
+gates itself with an in-app access code (see `docs/superpowers/specs/` — the
+access-code-auth design) rather than nginx Basic Auth.
+
+### Prerequisites
+
+- The bharatsc stack running (provides the `shared` network, nginx, and the
+  `*.niniconai.com` wildcard cert via niniconai's `scripts/init-ssl.sh`).
+- Host directories for storage (defaults): `/srv/moviehouse/data`, `/srv/moviehouse/media`.
+
+### Steps
+
+```bash
+cp .env.example .env      # set TMDB keys + MOVIEHOUSE_ACCESS_CODE (openssl rand -hex 24)
+./pre-deploy.sh           # strict fmt/clippy/test/lint gate
+./scripts/deploy.sh       # build image, start container, install nginx vhost, reload
+```
+
+Flags: `./scripts/deploy.sh --no-build` (skip image build), `--foreground` (run attached).
+
+### Viewing
+
+- **Phone (travelling):** open the site in the browser; HLS/H.264 play directly.
+- **Apple TV:** AirPlay from an iPhone/iPad Safari session (tvOS has no browser).
+- **LG TV (webOS) browser:** open the site; use the **H.264** transcode (HLS/HEVC are unreliable in that browser).
+
+Ports: 443 (via bharatsc nginx) for the web UI; `6881/tcp+udp` mapped directly for BitTorrent peers.
+
 ## CLI Commands
 
 ```bash
