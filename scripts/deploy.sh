@@ -104,17 +104,51 @@ fi
 
 echo ""
 echo "Installing nginx vhost into bharatsc..."
-cp "$GENERATED" "$DEST/moviehouse.conf"
 
-if docker compose -f "$BHARATSC_DIR/docker-compose.yml" exec -T nginx nginx -t 2>/dev/null; then
-    docker compose -f "$BHARATSC_DIR/docker-compose.yml" exec -T nginx nginx -s reload
-    echo "Nginx config installed and reloaded."
-else
-    echo "WARNING: nginx config test failed. Check that the wildcard cert for"
-    echo "niniconai.com exists (niniconai's scripts/init-ssl.sh) and review:"
+# bharatsc's nginx is shared infrastructure: it also fronts bharatsc.com and
+# niniconai.com. A vhost that fails `nginx -t` does not disturb the running
+# process (it keeps its in-memory config), but left on disk it makes the NEXT
+# `nginx -s reload`, container restart, or host reboot fail to start — taking
+# every site down. So snapshot what was there and roll back if the test fails.
+INSTALLED="$DEST/moviehouse.conf"
+BACKUP=""
+if [[ -f "$INSTALLED" ]]; then
+    BACKUP="$(mktemp)"
+    cp "$INSTALLED" "$BACKUP"
+fi
+
+restore_vhost() {
+    if [[ -n "$BACKUP" ]]; then
+        cp "$BACKUP" "$INSTALLED"
+        echo "Rolled back $INSTALLED to its previous contents."
+    else
+        rm -f "$INSTALLED"
+        echo "Removed $INSTALLED (it was not present before this run)."
+    fi
+}
+
+cp "$GENERATED" "$INSTALLED"
+
+if ! docker compose -f "$BHARATSC_DIR/docker-compose.yml" exec -T nginx nginx -t 2>/dev/null; then
+    echo "ERROR: nginx config test failed with the new vhost in place."
+    restore_vhost
+    echo ""
+    echo "Check that the wildcard cert for niniconai.com exists (niniconai's"
+    echo "scripts/init-ssl.sh) and review the full test output:"
     echo "  docker compose -f $BHARATSC_DIR/docker-compose.yml exec nginx nginx -t"
+    [[ -n "$BACKUP" ]] && rm -f "$BACKUP"
     exit 1
 fi
+
+if ! docker compose -f "$BHARATSC_DIR/docker-compose.yml" exec -T nginx nginx -s reload; then
+    echo "ERROR: nginx reload failed even though the config tested clean."
+    restore_vhost
+    [[ -n "$BACKUP" ]] && rm -f "$BACKUP"
+    exit 1
+fi
+
+[[ -n "$BACKUP" ]] && rm -f "$BACKUP"
+echo "Nginx config installed and reloaded."
 
 echo ""
 docker compose ps
