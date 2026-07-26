@@ -1,0 +1,39 @@
+services:
+  # ── MovieHouse web server (axum HTTP + WS + embedded SPA) ───────
+  # Joins the shared network so bharatsc's nginx can proxy the vhost.
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moviehouse:latest
+    container_name: moviehouse-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOME: /data
+    volumes:
+      - ${DATA_DIR:-/srv/moviehouse/data}:/data      # sled db + DHT cache
+      - ${MEDIA_DIR:-/srv/moviehouse/media}:/media   # downloads + transcoded
+    ports:
+      # BitTorrent peer/DHT port — nginx cannot proxy this; map it directly.
+      - "${BT_PORT:-6881}:6881/tcp"
+      - "${BT_PORT:-6881}:6881/udp"
+    healthcheck:
+      # Runs inside the container (localhost) against the public, unauthenticated /health route.
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:$${WEB_PORT:-9000}/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - internal
+      - shared
+
+networks:
+  internal:
+    driver: bridge
+  shared:
+    external: true
+    name: shared
+
+# No named volumes: media and data live on host bind mounts (see volumes above).
