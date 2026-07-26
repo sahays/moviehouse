@@ -201,7 +201,7 @@ impl Info {
     /// Length of a specific piece (last piece may be shorter).
     pub fn piece_length(&self, piece_index: u32) -> u32 {
         let total_pieces = self.pieces.len() as u32;
-        if piece_index == total_pieces - 1 {
+        if piece_index == total_pieces.saturating_sub(1) {
             // Last piece: may be shorter
             let remainder = (self.total_length % self.piece_length as u64) as u32;
             if remainder == 0 {
@@ -283,7 +283,7 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         .and_then(|v| v.as_bytes())
         .ok_or(MetainfoError::MissingField("pieces"))?;
 
-    if pieces_raw.len() % 20 != 0 {
+    if pieces_raw.is_empty() || pieces_raw.len() % 20 != 0 {
         return Err(MetainfoError::InvalidPiecesLength(pieces_raw.len()));
     }
 
@@ -360,6 +360,17 @@ fn parse_info(val: &BValue) -> Result<Info, MetainfoError> {
         FileLayout::Single { length } => *length,
         FileLayout::Multi { files } => files.iter().map(|f| f.length).sum(),
     };
+
+    // A well-formed torrent has exactly ceil(total_length / piece_length) piece
+    // hashes. Reject inconsistent metadata so a tiny .torrent can't declare an
+    // enormous (sparse) file allocation with no real piece coverage.
+    let expected_pieces = total_length.div_ceil(u64::from(piece_length));
+    if total_length == 0 || expected_pieces != pieces.len() as u64 {
+        return Err(MetainfoError::InvalidPieceLength(format!(
+            "declared total length {total_length} inconsistent with {} piece hashes of {piece_length}",
+            pieces.len()
+        )));
+    }
 
     Ok(Info {
         piece_length,
