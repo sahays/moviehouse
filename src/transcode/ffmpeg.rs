@@ -119,10 +119,7 @@ pub async fn run_remux(
     cancel: &CancellationToken,
 ) -> anyhow::Result<()> {
     // Pin the file protocol (input path derives from the untrusted torrent name).
-    let mut args: Vec<String> = vec![
-        "-i".into(),
-        format!("file:{}", input.to_string_lossy()),
-    ];
+    let mut args: Vec<String> = vec!["-i".into(), format!("file:{}", input.to_string_lossy())];
 
     // Copy video stream
     args.extend(["-c:v".into(), "copy".into()]);

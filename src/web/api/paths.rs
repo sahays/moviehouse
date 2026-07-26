@@ -87,8 +87,7 @@ pub fn confine(candidate: &Path) -> Result<PathBuf, &'static str> {
             None => return Err("path has no existing ancestor"),
         }
     }
-    let canonical_existing =
-        std::fs::canonicalize(existing).map_err(|_| "cannot resolve path")?;
+    let canonical_existing = std::fs::canonicalize(existing).map_err(|_| "cannot resolve path")?;
     if !under_allowed_root(&canonical_existing, &allowed_roots()) {
         return Err("path is outside the allowed media directories");
     }
