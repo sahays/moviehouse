@@ -84,6 +84,8 @@ export interface MediaGroup {
 export interface SystemStatus {
   ffmpeg_available: boolean;
   ffmpeg_version: string | null;
+  app_version?: string;
+  build_epoch?: number;
 }
 
 export interface AppSettings {

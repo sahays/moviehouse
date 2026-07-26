@@ -244,8 +244,13 @@ fn move_file(src: &std::path::Path, dest_dir: &std::path::Path) -> MoveResult {
 pub async fn system_status() -> impl IntoResponse {
     let available = crate::transcode::runner::ffmpeg_available();
     let version = crate::transcode::runner::ffmpeg_version();
+    let build_epoch: u64 = option_env!("MOVIEHOUSE_BUILD_EPOCH")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     Json(serde_json::json!({
         "ffmpeg_available": available,
         "ffmpeg_version": version,
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "build_epoch": build_epoch,
     }))
 }

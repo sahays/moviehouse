@@ -62,6 +62,13 @@ fn main() {
         fs::write("Cargo.toml", new_toml).unwrap();
     }
 
+    // Emit build timestamp (unix seconds) so the app can show "last deployed".
+    let build_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    println!("cargo:rustc-env=MOVIEHOUSE_BUILD_EPOCH={build_epoch}");
+
     // Always rerun so version bumps on every compile
     println!("cargo:rerun-if-changed=build_trigger");
 }
