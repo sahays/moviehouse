@@ -18,7 +18,12 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Session cookie name.
 pub const COOKIE_NAME: &str = "mh_session";
-/// Session lifetime: 30 days.
+/// Session lifetime: 30 days (chosen for convenience on a personal app).
+/// Tradeoff: the cookie is stateless, so a captured token stays valid for this
+/// full window and cannot be revoked individually — rotating
+/// `MOVIEHOUSE_ACCESS_CODE` invalidates every session at once (the HMAC key
+/// changes). `HttpOnly` + HTTPS make capture hard; shorten this if you need a
+/// tighter replay window.
 pub const SESSION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// Current unix time in seconds.
@@ -137,13 +142,26 @@ fn has_valid_session(headers: &HeaderMap, access_code: &str) -> bool {
         .is_some_and(|tok| verify_token(tok, access_code, now_unix()))
 }
 
+/// Best-effort client IP for audit logging (nginx sets X-Forwarded-For).
+fn client_ip(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map_or_else(|| "unknown".into(), |s| s.trim().to_string())
+}
+
 async fn login(
     State(state): State<AuthState>,
     headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Response {
+    let ip = client_ip(&headers);
     if !code_matches(&body.code, &state.access_code) {
-        tracing::warn!("access-code login failed");
+        tracing::warn!(ip = %ip, "access-code login failed");
+        // Small fixed delay to blunt online brute-force. Defense in depth behind
+        // nginx's login rate-limit and the required high-entropy access code.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"authenticated": false})),
@@ -152,7 +170,7 @@ async fn login(
     }
     let token = mint_token(&state.access_code, now_unix());
     let cookie = session_cookie_header(&token, request_is_secure(&headers));
-    tracing::info!("access-code login succeeded");
+    tracing::info!(ip = %ip, "access-code login succeeded");
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],

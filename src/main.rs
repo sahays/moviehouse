@@ -150,6 +150,9 @@ async fn cmd_magnet(magnet: MagnetLink, cli: &Cli, no_dht: bool) -> anyhow::Resu
     session.run().await
 }
 
+/// Minimum length for `MOVIEHOUSE_ACCESS_CODE` (the sole auth secret + HMAC key).
+const MIN_ACCESS_CODE_LEN: usize = 16;
+
 async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
@@ -179,10 +182,13 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
     };
 
     let config = Config::load();
-    if config.access_code.trim().is_empty() {
+    // The access code is the single gate AND the HMAC key — require real entropy
+    // so it can't be brute-forced online. 16 chars is the floor; `openssl rand
+    // -hex 24` (the documented generator) produces 48.
+    if config.access_code.trim().len() < MIN_ACCESS_CODE_LEN {
         anyhow::bail!(
-            "MOVIEHOUSE_ACCESS_CODE is required to serve the web UI. \
-             Set it in .env or the environment (generate one: openssl rand -hex 24)."
+            "MOVIEHOUSE_ACCESS_CODE must be at least {MIN_ACCESS_CODE_LEN} characters \
+             (it is the sole auth secret). Generate one: openssl rand -hex 24."
         );
     }
     let store = Arc::new(engine::store::Store::open()?);
