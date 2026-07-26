@@ -61,10 +61,10 @@ moviehouse serve --open
 moviehouse serve --bind 0.0.0.0:3000 --open
 ```
 
-Or use the install script (builds, launches in background, opens browser):
+Or use the local run script (builds, launches in background, opens browser):
 
 ```bash
-./install.sh
+./scripts/run-local.sh
 ```
 
 ## Production Deployment
@@ -83,9 +83,9 @@ access-code-auth design) rather than nginx Basic Auth.
 ### Steps
 
 ```bash
-cp .env.example .env      # set TMDB keys + MOVIEHOUSE_ACCESS_CODE (openssl rand -hex 24)
-./pre-deploy.sh           # strict fmt/clippy/test/lint gate
-./scripts/deploy.sh       # build image, start container, install nginx vhost, reload
+cp .env.example .env         # set TMDB keys + MOVIEHOUSE_ACCESS_CODE (openssl rand -hex 24)
+./scripts/pre-deploy.sh      # strict fmt/clippy/test/lint gate
+./scripts/deploy.sh          # build image, start container, install nginx vhost, reload
 ```
 
 Flags: `./scripts/deploy.sh --no-build` (skip image build), `--foreground` (run attached).
@@ -164,8 +164,8 @@ moviehouse serve
 ## Tests
 
 ```bash
-cargo test          # 69 unit tests
-./pre-deploy.sh     # Rust fmt/clippy + React prettier/eslint
+cargo test                 # unit + auth tests
+./scripts/pre-deploy.sh    # Rust fmt/clippy + React prettier/eslint
 ```
 
 ## License

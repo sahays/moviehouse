@@ -5,7 +5,7 @@ frontend/dist
 .gitignore
 docs
 tests
-install.sh
+scripts
 build_number
 *.log
 .env
