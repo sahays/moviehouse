@@ -60,11 +60,24 @@ pub async fn delete_torrent(
     StatusCode::NO_CONTENT
 }
 
+/// Cap on concurrent in-memory downloads to bound sockets/FDs/disk growth.
+const MAX_CONCURRENT_DOWNLOADS: usize = 50;
+
 #[allow(clippy::too_many_lines)]
 pub async fn add_torrent(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    if state.manager.active_count() >= MAX_CONCURRENT_DOWNLOADS {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError {
+                error: format!("too many active downloads (max {MAX_CONCURRENT_DOWNLOADS})"),
+            }),
+        )
+            .into_response();
+    }
+
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
 
