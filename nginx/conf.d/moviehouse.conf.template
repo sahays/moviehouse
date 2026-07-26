@@ -45,6 +45,14 @@ server {
 
     include /etc/nginx/conf.d/security_headers.inc;
 
+    # Content-Security-Policy (defense in depth against XSS). Tuned for the
+    # embedded Vite/React SPA: same-origin scripts, inline styles (Tailwind),
+    # TMDB poster images over https, media/blob for playback, same-origin
+    # WebSocket. VERIFY against the live app (watch the browser console) and
+    # relax if a legitimate resource is blocked.
+    set $mh_csp "default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'";
+    add_header Content-Security-Policy $mh_csp always;
+
     # Large enough for .torrent uploads; streamed responses are not buffered.
     client_max_body_size 50m;
 
@@ -90,6 +98,9 @@ server {
         limit_req zone=general burst=20 nodelay;
         include /etc/nginx/conf.d/proxy_params.inc;
         include /etc/nginx/conf.d/security_headers.inc;
+        # Re-assert the CSP here: a location with its own add_header does not
+        # inherit the server-level ones.
+        add_header Content-Security-Policy $mh_csp always;
         proxy_pass http://moviehouse-web:__PORT__;
     }
 }
