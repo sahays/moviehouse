@@ -25,7 +25,10 @@ pub async fn run_ffmpeg_encode(
 
     let mut args: Vec<String> = vec![
         "-i".into(),
-        input.to_string_lossy().into_owned(),
+        // Pin the file protocol: the input path derives from the (attacker-
+        // controlled) torrent name, so an unpinned value could be reparsed as
+        // an ffmpeg protocol (concat:, subfile:) → local file inclusion.
+        format!("file:{}", input.to_string_lossy()),
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),
@@ -115,7 +118,11 @@ pub async fn run_remux(
     probe: Option<&ProbeResult>,
     cancel: &CancellationToken,
 ) -> anyhow::Result<()> {
-    let mut args: Vec<String> = vec!["-i".into(), input.to_string_lossy().into()];
+    // Pin the file protocol (input path derives from the untrusted torrent name).
+    let mut args: Vec<String> = vec![
+        "-i".into(),
+        format!("file:{}", input.to_string_lossy()),
+    ];
 
     // Copy video stream
     args.extend(["-c:v".into(), "copy".into()]);
@@ -205,14 +212,24 @@ pub async fn extract_subtitles(
     let mut tracks = Vec::new();
 
     for (i, stream) in subtitle_streams.iter().enumerate() {
-        let fallback = format!("track{i}");
-        let lang_suffix = stream.language.as_deref().unwrap_or(&fallback);
+        // The subtitle `language` tag comes straight from untrusted container
+        // metadata; sanitize it before it becomes a filename component, or a
+        // value like `../../etc/x` would traverse out of `output_dir`.
+        let raw_lang = stream.language.as_deref().unwrap_or("");
+        let sanitized = crate::engine::library::sanitize_filename(raw_lang);
+        let lang_suffix = if sanitized.is_empty() {
+            format!("track{i}")
+        } else {
+            sanitized
+        };
         let vtt_path = output_dir.join(format!("{output_stem}.{lang_suffix}.vtt"));
 
         let result = tokio::process::Command::new("ffmpeg")
             .args([
                 "-i",
-                &input.to_string_lossy(),
+                // Pin the file protocol so an attacker-named path can't be
+                // reparsed as an ffmpeg protocol (concat:, subfile:, ...).
+                &format!("file:{}", input.to_string_lossy()),
                 "-map",
                 &format!("0:{}", stream.index),
                 "-c:s",

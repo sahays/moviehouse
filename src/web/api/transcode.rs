@@ -19,6 +19,18 @@ pub async fn manual_transcode(
     Path(id): Path<Uuid>,
     Json(req): Json<TranscodeRequest>,
 ) -> impl IntoResponse {
+    // Only accept a known preset name (data-integrity: don't persist arbitrary
+    // labels supplied in the request body).
+    if crate::transcode::presets::get_preset(&req.preset).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "unknown transcode preset".into(),
+            }),
+        )
+            .into_response();
+    }
+
     let Ok(Some(entry)) = state.store.get_media(&id) else {
         return (
             StatusCode::NOT_FOUND,

@@ -26,8 +26,11 @@ pub async fn probe_file(path: &std::path::Path) -> Option<ProbeResult> {
             "json",
             "-show_format",
             "-show_streams",
+            "-i",
         ])
-        .arg(path)
+        // Pin the file protocol so an attacker-named path can't be reparsed as
+        // an ffmpeg/ffprobe protocol.
+        .arg(format!("file:{}", path.to_string_lossy()))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
