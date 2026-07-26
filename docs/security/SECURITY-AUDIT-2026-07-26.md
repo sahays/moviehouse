@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-26
 - **Reviewed commit:** `f0b9d4b` (f0b9d4bec0a53c7a5d1c0ff0b278027472506e3d), branch `main`
-- **Status:** findings open (remediation not yet applied)
+- **Status:** ✅ **ALL findings remediated** (2026-07-26) — see Remediation summary below.
 
 Pre-public-exposure review across four dimensions (path traversal, command/argument
 injection, auth/session/web-layer, BitTorrent parsing/SSRF/DoS). Each finding was
@@ -15,9 +15,41 @@ access code, with the BitTorrent port 6881 (tcp+udp) directly on the internet.
 primitives are confined to `/data` and `/media` in the container — bad, but not root
 RCE. Running the raw binary as root (systemd) removes this mitigation.
 
-## Verdict: DO NOT expose publicly until CRITICAL + HIGH are fixed.
+## Remediation summary (2026-07-26)
 
-Two root causes drive most findings:
+All findings fixed and verified — full pre-deploy gate green (fmt, clippy `-D warnings`,
+95 tests, frontend build+lint) and runtime smoke tests pass.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| C1 bencode overflow / DHT DoS | `checked_add` + per-packet DHT task isolation + regression test | `9bff7bd` |
+| H1 settings download_dir write | path confinement in `put_settings` (`web::api::paths`) | `15e7803` |
+| H2 subtitle-lang arbitrary write | sanitize `language` before the `.vtt` path | `ac103ff` |
+| H3 scan_folder whole-disk read | confine scan path to allowed roots | `15e7803` |
+| H4 tracker SSRF | resolve + reject non-public IPs, pin DNS, no redirects (HTTP+UDP) | `207ff1e` |
+| M1 migrate_media path | confine target | `15e7803` |
+| M2 ffmpeg protocol injection | `file:`-pin untrusted ffmpeg/ffprobe inputs | `ac103ff` |
+| M3 browse over-broad | unified allowed-roots policy | `15e7803` |
+| M4 weak access code | min 16 chars enforced at startup | `f5f9d2c` |
+| M5 login brute-force | source-IP logging + 500ms failure delay | `f5f9d2c` |
+| M6 torrent length vs pieces | consistency check in `parse_info` | `9a68344` |
+| M7 resource exhaustion | `MOVIEHOUSE_MAX_DOWNLOADS` cap (default 2) | `bf9cd1f`, `d4a31ed` |
+| L1 delete primitive | closed by H3 | `15e7803` |
+| L2 error leakage | generic 500 body, log detail server-side | `15e7803` |
+| L3 logout replay | documented tradeoff (TTL kept 30d by choice) | `f5f9d2c` |
+| L4 no CSP | CSP added to the moviehouse nginx vhost | `e1ba695` |
+| L5 0-piece torrent | reject empty `pieces` + `saturating_sub` | `9a68344` |
+| L6 preset not whitelisted | reject unknown preset | `ac103ff` |
+
+**Deferred / residual (non-blocking):** M7's disk-free pre-check (needs a filesystem-stats
+crate; the concurrency cap + M6 bound the risk); the L4 CSP must be verified against the
+live SPA and relaxed if it blocks a legitimate resource; tracker DNS-rebinding is mitigated
+by IP-pinning but not fully eliminated. Keep the container's non-root `app` user, and do not
+run the raw binary as root.
+
+## Original verdict (pre-fix): DO NOT expose publicly until CRITICAL + HIGH are fixed.
+
+Two root causes drove most findings:
 - **(A) Unconfined request-body paths** — `put_settings`, `scan_folder`, `migrate_media`
   accept arbitrary absolute paths. One shared helper (`canonicalize` + `starts_with(root)`,
   already implemented correctly in `filesystem.rs`) fixes the cluster.
