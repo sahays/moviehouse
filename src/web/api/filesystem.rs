@@ -29,13 +29,11 @@ pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoRes
         )
             .into_response();
     };
-    let canonical_home = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
-    let volumes = std::path::Path::new("/Volumes");
-    if !canonical.starts_with(&canonical_home) && !canonical.starts_with(volumes) {
+    if !super::paths::is_under_allowed_root(&canonical) {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiError {
-                error: "access denied: path outside home directory".into(),
+                error: "access denied: path outside the allowed media directories".into(),
             }),
         )
             .into_response();
@@ -54,7 +52,7 @@ pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoRes
     // Only offer parent navigation if parent is within allowed paths
     let parent = path.parent().and_then(|p| {
         let canon = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        if canon.starts_with(&canonical_home) || canon.starts_with(volumes) {
+        if super::paths::is_under_allowed_root(&canon) {
             Some(p.to_string_lossy().to_string())
         } else {
             None

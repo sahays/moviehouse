@@ -1,6 +1,7 @@
 pub mod filesystem;
 pub mod library;
 pub mod media;
+pub mod paths;
 pub mod settings;
 pub mod torrents;
 pub mod transcode;

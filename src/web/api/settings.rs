@@ -27,6 +27,36 @@ pub async fn put_settings(
     State(state): State<Arc<AppState>>,
     Json(mut settings): Json<crate::engine::store::AppSettings>,
 ) -> impl IntoResponse {
+    // Confine user-supplied directories so a request body can't point
+    // downloads/transcodes/scans at system locations (or empty them, which
+    // would strip the protective leading "./" before ffmpeg args).
+    let dirs: [(&str, &std::path::Path); 2] = [
+        ("download_dir", &settings.download_dir),
+        ("transcode_dir", &settings.transcode_dir),
+    ];
+    for (label, dir) in dirs {
+        if let Err(msg) = super::paths::validate_config_dir(dir) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: format!("invalid {label}: {msg}"),
+                }),
+            )
+                .into_response();
+        }
+    }
+    if let Some(scan_dir) = settings.media_scan_dir.as_deref()
+        && let Err(msg) = super::paths::validate_config_dir(scan_dir)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!("invalid media_scan_dir: {msg}"),
+            }),
+        )
+            .into_response();
+    }
+
     // Preserve sensitive fields not exposed to frontend
     let existing = state.store.get_settings();
     if settings.tmdb_api_key.is_empty() {
@@ -34,13 +64,16 @@ pub async fn put_settings(
     }
     match state.store.put_settings(&settings) {
         Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "put_settings failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "internal error".into(),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -55,6 +88,15 @@ pub async fn migrate_media(
     Json(req): Json<MigrateRequest>,
 ) -> impl IntoResponse {
     let base = std::path::PathBuf::from(&req.path);
+    // Confine the migration target: a request body must not be able to create
+    // directories / move files into arbitrary system locations.
+    if let Err(msg) = super::paths::confine(&base) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("invalid path: {msg}") })),
+        )
+            .into_response();
+    }
     let new_dir = if base.file_name().and_then(|n| n.to_str()) == Some("moviehouse") {
         base
     } else {

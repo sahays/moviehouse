@@ -12,13 +12,16 @@ use crate::web::server::AppState;
 pub async fn list_library(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.store.list_media() {
         Ok(entries) => Json(entries).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list_media failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "internal error".into(),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -35,13 +38,16 @@ pub async fn get_library_item(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "get_media failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "internal error".into(),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -406,16 +412,20 @@ pub async fn scan_folder(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScanRequest>,
 ) -> impl IntoResponse {
-    let scan_path = std::path::PathBuf::from(&req.path);
-    if !scan_path.is_dir() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "path is not a directory".into(),
-            }),
-        )
-            .into_response();
-    }
+    // Confine the scan target to the allowed media roots — otherwise a caller
+    // could enumerate and import video files from anywhere on the host.
+    let scan_path = match super::paths::confine_existing_dir(std::path::Path::new(&req.path)) {
+        Ok(p) => p,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: format!("invalid path: {msg}"),
+                }),
+            )
+                .into_response();
+        }
+    };
 
     let video_files = crate::engine::library::detect_video_files(&scan_path);
 
