@@ -131,7 +131,9 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         )
         .with_state(state.clone())
         .route_layer(axum::middleware::from_fn_with_state(
-            super::auth::AuthState { access_code: state.access_code.clone().into() },
+            super::auth::AuthState {
+                access_code: state.access_code.clone().into(),
+            },
             super::auth::require_auth,
         ));
 

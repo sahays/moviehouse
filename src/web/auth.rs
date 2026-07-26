@@ -142,7 +142,10 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> Response {
     if !code_matches(&body.code, &state.access_code) {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"authenticated": false})))
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"authenticated": false})),
+        )
             .into_response();
     }
     let token = mint_token(&state.access_code, now_unix());
@@ -161,7 +164,11 @@ async fn status(State(state): State<AuthState>, headers: HeaderMap) -> Response 
 }
 
 async fn logout() -> Response {
-    (StatusCode::OK, [(header::SET_COOKIE, clear_cookie_header())]).into_response()
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, clear_cookie_header())],
+    )
+        .into_response()
 }
 
 async fn health() -> &'static str {
@@ -283,14 +290,21 @@ mod router_tests {
     use tower::ServiceExt; // oneshot
 
     fn state() -> AuthState {
-        AuthState { access_code: "secret-code".into() }
+        AuthState {
+            access_code: "secret-code".into(),
+        }
     }
 
     #[tokio::test]
     async fn health_is_public_200() {
         let app = auth_router(state());
         let res = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -366,7 +380,12 @@ mod router_tests {
     #[tokio::test]
     async fn protected_route_401_without_cookie() {
         let res = protected_app()
-            .oneshot(Request::builder().uri("/api/v1/dummy").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/dummy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);

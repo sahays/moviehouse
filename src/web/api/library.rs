@@ -60,11 +60,7 @@ pub async fn library_health(State(state): State<Arc<AppState>>) -> impl IntoResp
     let mut missing = 0u32;
     for e in &entries {
         // Check the best playable path (versions first, then media_file)
-        let playable = e
-            .versions
-            .values()
-            .any(|p| p.exists())
-            || e.media_file.exists();
+        let playable = e.versions.values().any(|p| p.exists()) || e.media_file.exists();
         if !playable {
             missing += 1;
         }

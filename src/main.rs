@@ -349,13 +349,19 @@ mod config_tests {
 
     #[test]
     fn env_value_wins_when_present() {
-        assert_eq!(pick(Some("env".into()), Some("file".into())).as_deref(), Some("env"));
+        assert_eq!(
+            pick(Some("env".into()), Some("file".into())).as_deref(),
+            Some("env")
+        );
         assert_eq!(pick(Some("env".into()), None).as_deref(), Some("env"));
     }
 
     #[test]
     fn empty_env_falls_back_to_file() {
-        assert_eq!(pick(Some(String::new()), Some("file".into())).as_deref(), Some("file"));
+        assert_eq!(
+            pick(Some(String::new()), Some("file".into())).as_deref(),
+            Some("file")
+        );
     }
 
     #[test]
