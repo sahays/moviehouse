@@ -13,7 +13,7 @@ import { FfmpegBanner } from "./components/FfmpegBanner";
 import { Logo } from "./components/Logo";
 import { Login } from "./components/Login";
 import { SettingsProvider } from "./contexts/SettingsContext";
-import { checkAuth } from "./lib/api";
+import { apiFetch, checkAuth } from "./lib/api";
 import type { MediaEntry } from "./types";
 
 type View = "library" | "downloads" | "settings";
@@ -46,7 +46,7 @@ function AppInner() {
 
   useEffect(() => {
     const fetchLibrary = () => {
-      fetch("/api/v1/library")
+      apiFetch("/api/v1/library")
         .then((r) => r.json())
         .then((data: unknown) => {
           if (Array.isArray(data)) setLibrary(data);

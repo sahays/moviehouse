@@ -2,22 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Package MovieHouse as a Dockerized satellite of the bharatsc shared stack, served over HTTPS with Basic Auth at `moviehouse.niniconai.com`, with `pre-deploy`/`deploy` scripts.
+**Goal:** Package MovieHouse as a Dockerized satellite of the bharatsc shared stack, served over HTTPS with in-app access-code auth (see access-code-auth spec) at `moviehouse.niniconai.com`, with `pre-deploy`/`deploy` scripts.
 
-**Architecture:** MovieHouse builds its own image and runs a single `web` container on the external `shared` Docker network. bharatsc's central nginx (the only process binding host 80/443, holder of the wildcard `*.niniconai.com` cert) reverse-proxies to it. Deploy generates an nginx vhost from a template and installs it into `${BHARATSC_DIR}/nginx/conf.d/` plus an `htpasswd` file, then reloads bharatsc's nginx.
+**Architecture:** MovieHouse builds its own image and runs a single `web` container on the external `shared` Docker network. bharatsc's central nginx (the only process binding host 80/443, holder of the wildcard `*.niniconai.com` cert) reverse-proxies to it. Deploy generates an nginx vhost from a template and installs it into `${BHARATSC_DIR}/nginx/conf.d/`, then reloads bharatsc's nginx. Auth is handled entirely in-app (access code + `mh_session` cookie); nginx has no Basic Auth, only a login rate limit.
 
 **Tech Stack:** Rust (axum, sled, rust-embed), React (embedded via `build.rs`), Docker + Compose, nginx (bharatsc), ffmpeg, bash.
 
 ## Global Constraints
 
 - Target domain: `moviehouse.niniconai.com` (subdomain covered by niniconai's wildcard `*.niniconai.com` cert — do NOT acquire a new cert).
-- The single reverse proxy is **bharatsc's** nginx. MovieHouse contributes a vhost `.conf` + `.htpasswd` into `${BHARATSC_DIR}/nginx/conf.d/`; it runs **no** nginx of its own.
+- The single reverse proxy is **bharatsc's** nginx. MovieHouse contributes a vhost `.conf` into `${BHARATSC_DIR}/nginx/conf.d/`; it runs **no** nginx of its own.
 - External Docker network name: `shared` (created by bharatsc; must already exist).
 - Container internal web port: driven by `WEB_PORT` (default `9000`). BitTorrent peer port: `6881` internal, host-mapped via `BT_PORT` (default `6881`).
 - Data paths derive from `$HOME` in the app, so the container sets `HOME=/data`. `MOVIEHOUSE_DATA_DIR`/`MOVIEHOUSE_TRANSCODE_DIR` are NOT read by the code — do not rely on them.
 - Storage: host bind mounts — `${DATA_DIR}:/data` (sled + DHT) and `${MEDIA_DIR}:/media` (downloads + transcoded). Defaults: `DATA_DIR=/srv/moviehouse/data`, `MEDIA_DIR=/srv/moviehouse/media`.
-- Auth: nginx HTTP Basic Auth over the whole vhost. Credentials from `.env` (`BASIC_AUTH_USER`, `BASIC_AUTH_PASSWORD`); never commit the generated htpasswd.
-- Health probe: `GET /api/v1/library/health` (no app code change).
+- Auth: in-app access-code auth (see access-code-auth spec) — the app itself gates every `/api/v1/*` route except `/api/v1/auth/*` and `/health` via a session cookie. Credential from `.env` (`MOVIEHOUSE_ACCESS_CODE`). nginx Basic Auth is removed; nginx only rate-limits `/api/v1/auth/login` via the shared `auth` zone.
+- Health probe: `GET /health` (public, unauthenticated; added by the access-code-auth work).
 - nginx shared building blocks available in bharatsc's live config: `limit_req` zones `general` and `auth`; includes `proxy_params.inc` and `security_headers.inc`. `proxy_params.inc` sets `Connection ""` with 30s timeouts and no `Upgrade` header — so WS and streaming need dedicated locations.
 
 **Environment note for the executor:** Steps marked **[local]** can be validated on any machine with Docker. Steps marked **[server]** require the production host where the bharatsc stack and `shared` network exist. If Docker is unavailable locally, still create files and run the non-Docker validations (`bash -n`, `shellcheck`), and defer `[server]`/`docker build` steps to the host.
@@ -201,7 +201,7 @@ git commit -m "feat(deploy): add multi-stage Dockerfile with ffmpeg runtime"
 
 **Interfaces:**
 - Consumes: image from Task 2; env vars from Task 1 (`WEB_PORT`, `BT_PORT`, `DATA_DIR`, `MEDIA_DIR`).
-- Produces: service `web` → container `moviehouse-web` reachable at `moviehouse-web:${WEB_PORT}` on the `shared` network; healthcheck on `/api/v1/library/health`.
+- Produces: service `web` → container `moviehouse-web` reachable at `moviehouse-web:${WEB_PORT}` on the `shared` network; healthcheck on `/health`.
 
 - [ ] **Step 1: Create `docker-compose.yml`**
 
@@ -227,8 +227,8 @@ services:
       - "${BT_PORT:-6881}:6881/tcp"
       - "${BT_PORT:-6881}:6881/udp"
     healthcheck:
-      # Runs inside the container (localhost), so it bypasses nginx Basic Auth.
-      test: ["CMD", "sh", "-c", "curl -sf http://localhost:$${WEB_PORT:-9000}/api/v1/library/health"]
+      # Runs inside the container (localhost) against the public, unauthenticated /health route.
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:$${WEB_PORT:-9000}/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -267,7 +267,7 @@ git commit -m "feat(deploy): add docker-compose with bind mounts and healthcheck
 - Create: `nginx/conf.d/moviehouse.conf.template`
 
 **Interfaces:**
-- Consumes: `__PORT__` placeholder (substituted with `WEB_PORT` by `deploy.sh`); bharatsc-provided `limit_req` zone `general`, includes `proxy_params.inc` + `security_headers.inc`, wildcard cert at `/etc/letsencrypt/live/niniconai.com/`, and `/etc/nginx/conf.d/moviehouse.htpasswd` (installed by `deploy.sh`).
+- Consumes: `__PORT__` placeholder (substituted with `WEB_PORT` by `deploy.sh`); bharatsc-provided `limit_req` zones `general` and `auth`, includes `proxy_params.inc` + `security_headers.inc`, wildcard cert at `/etc/letsencrypt/live/niniconai.com/`.
 - Produces: `moviehouse.conf` routing `moviehouse.niniconai.com` → `moviehouse-web:__PORT__`.
 
 - [ ] **Step 1: Create `nginx/conf.d/moviehouse.conf.template`**
@@ -323,9 +323,14 @@ server {
     # Large enough for .torrent uploads; streamed responses are not buffered.
     client_max_body_size 50m;
 
-    # ── Basic Auth — gates the whole app (torrent adder, file browser) ──
-    auth_basic "MovieHouse";
-    auth_basic_user_file /etc/nginx/conf.d/moviehouse.htpasswd;
+    # ── Login rate limit — reuses bharatsc's shared `auth` zone ────
+    # In-app access-code auth (see access-code-auth spec) issues the
+    # `mh_session` cookie; this just throttles brute-force login attempts.
+    location = /api/v1/auth/login {
+        limit_req zone=auth burst=5 nodelay;
+        include /etc/nginx/conf.d/proxy_params.inc;
+        proxy_pass http://moviehouse-web:__PORT__;
+    }
 
     # ── WebSocket — download-progress stream ──────────────────────
     location = /api/v1/ws {
@@ -367,7 +372,7 @@ server {
 
 - [ ] **Step 2: Verify the rendered config passes `nginx -t`** **[local]**
 
-This renders the template and tests it in a throwaway nginx container, stubbing the includes/certs/htpasswd/upstream that only exist in the live bharatsc stack:
+This renders the template and tests it in a throwaway nginx container, stubbing the includes/cert/upstream that only exist in the live bharatsc stack:
 
 ```bash
 tmp="$(mktemp -d)"
@@ -376,7 +381,6 @@ sed 's/__PORT__/9000/g' nginx/conf.d/moviehouse.conf.template > "$tmp/conf.d/mov
 # Stub includes and a self-signed cert so `nginx -t` can parse the vhost.
 : > "$tmp/conf.d/security_headers.inc"
 printf 'proxy_set_header Host $host;\n' > "$tmp/conf.d/proxy_params.inc"
-printf 'admin:$apr1$abc$def\n' > "$tmp/conf.d/moviehouse.htpasswd"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -keyout "$tmp/certs/live/niniconai.com/privkey.pem" \
   -out "$tmp/certs/live/niniconai.com/fullchain.pem" -subj "/CN=test" 2>/dev/null
@@ -386,7 +390,7 @@ docker run --rm \
   -v "$tmp/certs:/etc/letsencrypt:ro" \
   -v "$tmp/www:/var/www/certbot:ro" \
   nginx:1.25-alpine sh -c '
-    printf "events{}\nhttp{\n  limit_req_zone \$binary_remote_addr zone=general:10m rate=10r/s;\n  include /etc/nginx/conf.d/*.conf;\n}\n" > /etc/nginx/nginx.conf
+    printf "events{}\nhttp{\n  limit_req_zone \$binary_remote_addr zone=general:10m rate=10r/s;\n  limit_req_zone \$binary_remote_addr zone=auth:10m rate=1r/s;\n  include /etc/nginx/conf.d/*.conf;\n}\n" > /etc/nginx/nginx.conf
     nginx -t'
 rm -rf "$tmp"
 ```
@@ -397,7 +401,7 @@ Expected: `nginx: configuration file /etc/nginx/nginx.conf test is successful`
 
 ```bash
 git add nginx/conf.d/moviehouse.conf.template
-git commit -m "feat(deploy): add nginx vhost template with WS + streaming + basic auth"
+git commit -m "feat(deploy): add nginx vhost template with WS + streaming + login rate limit"
 ```
 
 ---
@@ -480,6 +484,13 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
     pass ".env file exists"
 else
     fail ".env not found — copy .env.example to .env"; ERRORS=$((ERRORS + 1))
+fi
+
+echo "Access code (in-app auth):"
+if [[ -n "${MOVIEHOUSE_ACCESS_CODE:-}" && "${MOVIEHOUSE_ACCESS_CODE}" != "change_me" ]]; then
+    pass "MOVIEHOUSE_ACCESS_CODE is set"
+else
+    fail "MOVIEHOUSE_ACCESS_CODE not set (or still 'change_me') in .env"; ERRORS=$((ERRORS + 1))
 fi
 
 echo "Storage (host bind mounts):"
@@ -612,7 +623,7 @@ git commit -m "refactor(deploy): make pre-deploy strict verify-only + frontend l
 
 **Interfaces:**
 - Consumes: `.env`; `scripts/check-deps.sh`; `docker-compose.yml`; `nginx/conf.d/moviehouse.conf.template`; `${BHARATSC_DIR}/nginx/conf.d/` (writable host dir mounted into bharatsc nginx); the running `bharatsc-nginx` container.
-- Produces: a running `moviehouse-web` container and an installed, reloaded nginx vhost + htpasswd.
+- Produces: a running `moviehouse-web` container and an installed, reloaded nginx vhost.
 
 - [ ] **Step 1: Create `scripts/deploy.sh`**
 
@@ -662,32 +673,28 @@ if ! docker network inspect shared &>/dev/null; then
 fi
 echo "shared network found."
 
-# ── 4. Validate Basic Auth credentials ───────────────────────────
-if [[ -z "${BASIC_AUTH_USER:-}" || -z "${BASIC_AUTH_PASSWORD:-}" || "${BASIC_AUTH_PASSWORD}" == "change_me" ]]; then
-    echo "ERROR: BASIC_AUTH_USER / BASIC_AUTH_PASSWORD must be set to non-default values in .env."
+# ── 4. Validate access code ───────────────────────────────────────
+if [[ -z "${MOVIEHOUSE_ACCESS_CODE:-}" || "${MOVIEHOUSE_ACCESS_CODE}" == "change_me" ]]; then
+    echo "ERROR: MOVIEHOUSE_ACCESS_CODE must be set to a non-default value in .env."
+    echo "Generate one with: openssl rand -hex 24"
     exit 1
 fi
 
-# ── 5. Generate htpasswd (apr1 via openssl — no htpasswd binary) ──
-HTPASSWD_FILE="$PROJECT_ROOT/nginx/conf.d/moviehouse.htpasswd"
-mkdir -p "$PROJECT_ROOT/nginx/conf.d"
-printf '%s:%s\n' "$BASIC_AUTH_USER" "$(openssl passwd -apr1 "$BASIC_AUTH_PASSWORD")" > "$HTPASSWD_FILE"
-echo "Generated htpasswd for user '$BASIC_AUTH_USER'."
-
-# ── 6. Render nginx vhost from template ──────────────────────────
+# ── 5. Render nginx vhost from template ───────────────────────────
 TEMPLATE="$PROJECT_ROOT/nginx/conf.d/moviehouse.conf.template"
 GENERATED="$PROJECT_ROOT/nginx/conf.d/moviehouse.conf"
+mkdir -p "$PROJECT_ROOT/nginx/conf.d"
 echo "Generating nginx config (WEB_PORT=$WEB_PORT)..."
 sed "s/__PORT__/$WEB_PORT/g" "$TEMPLATE" > "$GENERATED"
 
-# ── 7. Build image ───────────────────────────────────────────────
+# ── 6. Build image ────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "Building web image..."
     docker compose build web
     echo ""
 fi
 
-# ── 8. Start web service ─────────────────────────────────────────
+# ── 7. Start web service ──────────────────────────────────────────
 if [[ "$FOREGROUND" == true ]]; then
     echo "Starting moviehouse-web (foreground)..."
     docker compose up
@@ -697,12 +704,12 @@ fi
 echo "Starting moviehouse-web..."
 docker compose up -d
 
-# ── 9. Health check ──────────────────────────────────────────────
+# ── 8. Health check ───────────────────────────────────────────────
 echo ""
 echo "Waiting for health check..."
 HEALTHY=false
 for _ in $(seq 1 20); do
-    if docker compose exec -T web curl -sf "http://localhost:${WEB_PORT}/api/v1/library/health" >/dev/null 2>&1; then
+    if docker compose exec -T web curl -sf "http://localhost:${WEB_PORT}/health" >/dev/null 2>&1; then
         echo "moviehouse-web is healthy."
         HEALTHY=true
         break
@@ -716,7 +723,7 @@ if [[ "$HEALTHY" == false ]]; then
     exit 1
 fi
 
-# ── 10. Install nginx vhost + htpasswd into bharatsc, reload ──────
+# ── 9. Install nginx vhost into bharatsc, reload ──────────────────
 DEST="$BHARATSC_DIR/nginx/conf.d"
 if [[ ! -d "$DEST" ]]; then
     echo "WARNING: bharatsc nginx/conf.d not found at $DEST"
@@ -726,9 +733,8 @@ if [[ ! -d "$DEST" ]]; then
 fi
 
 echo ""
-echo "Installing nginx vhost + htpasswd into bharatsc..."
+echo "Installing nginx vhost into bharatsc..."
 cp "$GENERATED" "$DEST/moviehouse.conf"
-cp "$HTPASSWD_FILE" "$DEST/moviehouse.htpasswd"
 
 if docker compose -f "$BHARATSC_DIR/docker-compose.yml" exec -T nginx nginx -t 2>/dev/null; then
     docker compose -f "$BHARATSC_DIR/docker-compose.yml" exec -T nginx nginx -s reload
@@ -783,7 +789,7 @@ On the production host, with the bharatsc stack already running (so `shared` and
 ```bash
 sudo mkdir -p /srv/moviehouse/data /srv/moviehouse/media
 cp .env.example .env
-# Edit .env: set TMDB keys, BASIC_AUTH_USER/PASSWORD, and confirm DATA_DIR/MEDIA_DIR.
+# Edit .env: set TMDB keys, MOVIEHOUSE_ACCESS_CODE (openssl rand -hex 24), and confirm DATA_DIR/MEDIA_DIR.
 ```
 
 - [ ] **Step 2: Run the pre-deploy gate** **[server or dev]**
@@ -796,26 +802,31 @@ Expected: `All checks passed.`
 Run: `./scripts/deploy.sh`
 Expected: ends with `moviehouse-web is healthy.`, `Nginx config installed and reloaded.`, and `Deployed: https://moviehouse.niniconai.com`.
 
-- [ ] **Step 4: Verify HTTPS + Basic Auth from outside** **[server]**
+- [ ] **Step 4: Verify the access-code login + session cookie from outside** **[server]**
 
 ```bash
-# Unauthenticated request should be rejected by nginx:
-curl -s -o /dev/null -w "%{http_code}\n" https://moviehouse.niniconai.com/
+# Unauthenticated request to a protected route should be rejected by the app:
+curl -s -o /dev/null -w "%{http_code}\n" https://moviehouse.niniconai.com/api/v1/library
 # Expected: 401
 
-# Authenticated request should reach the app:
-curl -s -o /dev/null -w "%{http_code}\n" -u "$BASIC_AUTH_USER:$BASIC_AUTH_PASSWORD" \
-  https://moviehouse.niniconai.com/api/v1/library/health
+# Login with the access code, saving the mh_session cookie:
+curl -s -o /dev/null -c /tmp/mh_cookies.txt -H "Content-Type: application/json" \
+  -d "{\"code\":\"$MOVIEHOUSE_ACCESS_CODE\"}" \
+  https://moviehouse.niniconai.com/api/v1/auth/login
+
+# Authenticated request (with the session cookie) should reach the app:
+curl -s -o /dev/null -w "%{http_code}\n" -b /tmp/mh_cookies.txt \
+  https://moviehouse.niniconai.com/api/v1/library
 # Expected: 200
 ```
 
 - [ ] **Step 5: Verify the SPA loads and WS upgrades** **[server]**
 
 ```bash
-# SPA index (200, HTML):
-curl -s -u "$BASIC_AUTH_USER:$BASIC_AUTH_PASSWORD" https://moviehouse.niniconai.com/ | head -c 100
-# WebSocket upgrade handshake returns 101:
-curl -s -o /dev/null -w "%{http_code}\n" -u "$BASIC_AUTH_USER:$BASIC_AUTH_PASSWORD" \
+# SPA index (200, HTML) — no auth required, the app serves the login shell:
+curl -s https://moviehouse.niniconai.com/ | head -c 100
+# WebSocket upgrade handshake returns 101 (using the session cookie from Step 4):
+curl -s -o /dev/null -w "%{http_code}\n" -b /tmp/mh_cookies.txt \
   -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
   https://moviehouse.niniconai.com/api/v1/ws
@@ -830,7 +841,9 @@ Insert after the existing "Quick Start" section:
 ## Production Deployment
 
 MovieHouse deploys as a satellite of the bharatsc shared Docker stack, served at
-`https://moviehouse.niniconai.com` behind bharatsc's nginx (wildcard TLS + Basic Auth).
+`https://moviehouse.niniconai.com` behind bharatsc's nginx (wildcard TLS). The app
+gates itself with an in-app access code (see the access-code-auth spec) rather than
+nginx Basic Auth.
 
 ### Prerequisites
 - The bharatsc stack running (provides the `shared` network, nginx, and the
@@ -839,7 +852,7 @@ MovieHouse deploys as a satellite of the bharatsc shared Docker stack, served at
 
 ### Steps
 ```bash
-cp .env.example .env      # set TMDB keys + BASIC_AUTH_USER/PASSWORD
+cp .env.example .env      # set TMDB keys + MOVIEHOUSE_ACCESS_CODE
 ./pre-deploy.sh           # strict fmt/clippy/test/lint gate
 ./scripts/deploy.sh       # build image, start container, install nginx vhost, reload
 ```
@@ -863,7 +876,7 @@ git commit -m "docs: add production deployment section"
 
 - [ ] **Step 8: Final smoke test in a real client** **[server]**
 
-Open `https://moviehouse.niniconai.com` in a browser, authenticate with the Basic Auth credentials, confirm the library loads, add a small torrent, and confirm progress updates stream over the WebSocket. Then play a transcoded title and confirm it streams (seek works).
+Open `https://moviehouse.niniconai.com` in a browser, enter the access code on the login screen, confirm the library loads, add a small torrent, and confirm progress updates stream over the WebSocket. Then play a transcoded title and confirm it streams (seek works).
 
 ---
 
@@ -873,17 +886,17 @@ Open `https://moviehouse.niniconai.com` in a browser, authenticate with the Basi
 - Satellite pattern / install into bharatsc nginx → Tasks 4, 7. ✓
 - Reuse wildcard cert (no init-ssl) → Task 4 (cert path), Task 5 (cert presence warn). ✓
 - Host bind-mount storage → Tasks 1, 3. ✓
-- nginx Basic Auth → Tasks 4 (vhost), 7 (htpasswd gen + install), 8 (401/200 verify). ✓
+- In-app access-code auth (see access-code-auth spec); nginx Basic Auth removed → Task 4 (login rate-limit location), Task 5 (`MOVIEHOUSE_ACCESS_CODE` check), Task 7 (access-code guard), Task 8 (login + `mh_session` cookie verify). ✓
 - ffmpeg in runtime → Task 2. ✓
 - HOME=/data for data paths → Task 2. ✓
 - Direct 6881 peer port → Task 3. ✓
 - WS + streaming dedicated locations → Task 4 (+ Task 8 WS 101 check). ✓
-- Health probe `/api/v1/library/health` → Tasks 3, 7, 8. ✓
+- Health probe `/health` → Tasks 3, 7, 8. ✓
 - Strict verify-only pre-deploy + frontend lint → Task 6. ✓
 - build/check-deps/deploy scripts → Tasks 5, 7. ✓
 - `.env.example` / `.dockerignore` / `.gitignore` → Task 1. ✓
 - Out of scope (no init-ssl, no OAuth, no DB, keep install.sh) → honored (not present). ✓
 
-**Placeholder scan:** No TBD/TODO; every file's full contents and every verification command are inline. `__PORT__` is an intentional template token, substituted in Task 7 Step 6 and Task 4 Step 2.
+**Placeholder scan:** No TBD/TODO; every file's full contents and every verification command are inline. `__PORT__` is an intentional template token, substituted in Task 7 Step 5 and Task 4 Step 2.
 
-**Type/name consistency:** Env var names (`WEB_PORT`, `BT_PORT`, `DATA_DIR`, `MEDIA_DIR`, `BASIC_AUTH_USER`, `BASIC_AUTH_PASSWORD`, `BHARATSC_DIR`, `DOMAIN`) are identical across `.env.example` (Task 1), compose (Task 3), and scripts (Tasks 5, 7). Container name `moviehouse-web`, image `moviehouse:latest`, upstream `moviehouse-web:__PORT__`, health path `/api/v1/library/health`, htpasswd path `/etc/nginx/conf.d/moviehouse.htpasswd`, and cert path `/etc/letsencrypt/live/niniconai.com/` are consistent across Tasks 2, 3, 4, 7.
+**Type/name consistency:** Env var names (`WEB_PORT`, `BT_PORT`, `DATA_DIR`, `MEDIA_DIR`, `MOVIEHOUSE_ACCESS_CODE`, `BHARATSC_DIR`, `DOMAIN`) are identical across `.env.example`, compose (Task 3), and scripts (Tasks 5, 7); `MOVIEHOUSE_ACCESS_CODE` was introduced by the access-code-auth work and folded in here, replacing `BASIC_AUTH_USER`/`BASIC_AUTH_PASSWORD` (Task 1 predates that change and is already committed, so its listing still shows the superseded vars). Container name `moviehouse-web`, image `moviehouse:latest`, upstream `moviehouse-web:__PORT__`, health path `/health`, and cert path `/etc/letsencrypt/live/niniconai.com/` are consistent across Tasks 2, 3, 4, 7.

@@ -49,8 +49,8 @@ Internet ── 6881 ─▶ moviehouse-web:6881                       (BitTorren
 | Runtime | Docker on Linux, single `web` container | sled is embedded — no DB container needed |
 | TLS | **Reuse niniconai's wildcard `*.niniconai.com`** | Subdomain already covered; no cert acquisition / init-ssl script |
 | Storage | **Host bind mounts** for data + media | Media is large; must live on a real disk, accessible outside Docker |
-| Auth | **nginx HTTP Basic Auth** (one shared credential) | App has no auth; a public torrent-adder + file browser must be gated. Browsers remember it, so it's invisible after first login and doesn't affect playback/AirPlay |
-| Health probe | Existing `/api/v1/library/health` | Keeps this a zero-app-code packaging task |
+| Auth | **In-app access-code auth** (see access-code-auth spec) | App now gates itself via `MOVIEHOUSE_ACCESS_CODE` + session cookie; nginx HTTP Basic Auth is removed — no `auth_basic`/`htpasswd` in the nginx layer |
+| Health probe | `/health` (public, unauthenticated) | Replaces `/api/v1/library/health`; must stay reachable without a session so Docker/nginx health checks don't require login |
 | pre-deploy style | **Strict verify-only** (niniconai style) + frontend lint | Matches the reference scripts; CI-grade gate, no silent auto-fix |
 
 ## App-specific facts that shape the packaging
