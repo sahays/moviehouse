@@ -60,20 +60,12 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             axum::routing::post(library::refresh_metadata),
         )
         .route(
-            "/api/v1/media/{id}/stream",
-            axum::routing::get(media::stream_media),
-        )
-        .route(
-            "/api/v1/media/{id}/segment/{filename}",
-            axum::routing::get(media::stream_segment),
-        )
-        .route(
             "/api/v1/media/{id}/subtitles",
             axum::routing::get(media::list_subtitles).post(media::upload_subtitle),
         )
         .route(
-            "/api/v1/media/{id}/subtitles/{index}",
-            axum::routing::get(media::stream_subtitle),
+            "/api/v1/media/{id}/playback-token",
+            axum::routing::post(media::playback_token),
         )
         .route(
             "/api/v1/media/{id}/progress",
@@ -143,11 +135,36 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         access_code: state.access_code.clone().into(),
     };
 
+    // Byte-serving routes an external player fetches by URL. AirPlay and
+    // Chromecast receivers are separate HTTP clients with no session cookie, so
+    // these additionally accept a `?token=` capability scoped to the media id
+    // (minted by POST /api/v1/media/{id}/playback-token). They are read-only —
+    // nothing that mutates state is reachable with a playback token.
+    let media = Router::new()
+        .route(
+            "/api/v1/media/{id}/stream",
+            axum::routing::get(media::stream_media),
+        )
+        .route(
+            "/api/v1/media/{id}/segment/{filename}",
+            axum::routing::get(media::stream_segment),
+        )
+        .route(
+            "/api/v1/media/{id}/subtitles/{index}",
+            axum::routing::get(media::stream_subtitle),
+        )
+        .with_state(state.clone())
+        .route_layer(axum::middleware::from_fn_with_state(
+            auth_state.clone(),
+            super::auth::require_media_auth,
+        ));
+
     // CORS: allow any origin for LAN access (phones, TVs, other devices).
     // Credentials are not allowed (no .allow_credentials), limiting CSRF risk.
     Router::new()
         .merge(super::auth::auth_router(auth_state))
         .merge(api)
+        .merge(media)
         .fallback(static_handler)
         .layer(
             CorsLayer::new()

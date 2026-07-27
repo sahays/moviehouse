@@ -31,7 +31,8 @@ Single binary. No cloud. Your media, your network.
 - **Click to play** — click poster to stream in browser
 - **HTTP range requests** — seeking, pause/resume
 - **Works everywhere** — Safari, Chrome (Mac/Android), Edge
-- **AirPlay** — stream to Apple TV from any Apple device
+- **AirPlay** — stream to Apple TV from any Apple device, via a short-lived
+  playback token (the receiver fetches the URL itself and has no session cookie)
 
 ### BitTorrent Engine
 - **DHT, magnet links, PEX** — full peer discovery
@@ -94,7 +95,10 @@ Flags: `./scripts/deploy.sh --no-build` (skip image build), `--foreground` (run 
 ### Viewing
 
 - **Phone (travelling):** open the site in the browser; HLS/H.264 play directly.
-- **Apple TV:** AirPlay from an iPhone/iPad Safari session (tvOS has no browser).
+- **Apple TV:** AirPlay from an iPhone/iPad/Mac Safari session (tvOS has no browser).
+  The receiver fetches the stream itself and cannot send the session cookie, so the
+  player mints a 12-hour **playback token** (scoped to that one title, read-only) and
+  appends it to the media URL. This is automatic — nothing to configure.
 - **LG TV (webOS) browser:** open the site; use the **H.264** transcode (HLS/HEVC are unreliable in that browser).
 
 Ports: 443 (via bharatsc nginx) for the web UI; `6881/tcp+udp` mapped directly for BitTorrent peers.

@@ -31,6 +31,26 @@ export async function login(code: string): Promise<boolean> {
   return res.ok;
 }
 
+// A short-lived capability for one media entry, appended to the stream and
+// subtitle URLs. AirPlay/Chromecast receivers fetch those URLs from their own
+// device, without the session cookie, so the token is what lets them play.
+// Returns null on failure — the caller falls back to plain cookie-auth URLs,
+// which still work for playback in this browser.
+export async function fetchPlaybackToken(
+  mediaId: string,
+): Promise<string | null> {
+  try {
+    const res = await apiFetch(`/api/v1/media/${mediaId}/playback-token`, {
+      method: "POST",
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { token?: string };
+    return data.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function logout(): Promise<void> {
   try {
     await fetch("/api/v1/auth/logout", { method: "POST" });

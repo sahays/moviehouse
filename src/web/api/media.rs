@@ -11,11 +11,33 @@ use uuid::Uuid;
 
 use crate::web::server::AppState;
 
+/// Mint a short-lived playback token for one media entry.
+///
+/// The player appends it to the stream/subtitle URLs so an `AirPlay` or Chromecast
+/// receiver — a separate device with no session cookie — can still fetch the
+/// bytes. Cookie-guarded, so only an already-authenticated session can mint one.
+pub async fn playback_token(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let Ok(Some(_)) = state.store.get_media(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let now = crate::web::auth::now_unix();
+    let token = crate::web::auth::mint_playback_token(&state.access_code, &id.to_string(), now);
+    Json(serde_json::json!({
+        "token": token,
+        "expires_at": now + crate::web::auth::PLAYBACK_TTL_SECS,
+    }))
+    .into_response()
+}
+
 #[allow(clippy::too_many_lines)]
 pub async fn stream_media(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
+    uri: axum::http::Uri,
 ) -> impl IntoResponse {
     let Ok(Some(entry)) = state.store.get_media(&id) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -54,12 +76,16 @@ pub async fn stream_media(
         let Ok(content) = tokio::fs::read_to_string(&file_path).await else {
             return StatusCode::NOT_FOUND.into_response();
         };
-        // Rewrite segment filenames to API URLs
+        // Rewrite segment filenames to API URLs. A caller that reached us with a
+        // playback token has no session cookie, so the segment URLs must carry
+        // the same token or every segment fetch 401s.
+        let token_suffix = crate::web::auth::playback_token_query(uri.query())
+            .map_or_else(String::new, |t| format!("?token={t}"));
         let rewritten: String = content
             .lines()
             .map(|line| {
                 if !line.starts_with('#') && !line.is_empty() {
-                    format!("/api/v1/media/{id}/segment/{line}")
+                    format!("/api/v1/media/{id}/segment/{line}{token_suffix}")
                 } else {
                     line.to_string()
                 }

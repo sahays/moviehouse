@@ -34,8 +34,7 @@ pub fn now_unix() -> i64 {
     #[allow(clippy::cast_possible_wrap)]
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// HMAC-SHA256(key = `access_code`, msg) → lowercase hex.
@@ -76,6 +75,55 @@ pub fn verify_token(token: &str, access_code: &str, now_unix: i64) -> bool {
         Ok(exp) => exp > now_unix,
         Err(_) => false,
     }
+}
+
+/// Playback-token lifetime: 12 hours. Long enough to start a film in the evening,
+/// pause it, and finish it — short enough that a leaked URL stops working the
+/// same day.
+pub const PLAYBACK_TTL_SECS: i64 = 12 * 60 * 60;
+
+/// Mint a playback token for one media entry: `"{exp}.{hex(hmac)}"`.
+///
+/// AirPlay/Chromecast receivers fetch the media URL themselves, as separate HTTP
+/// clients with no access to the browser's cookie jar — an Apple TV asking for
+/// `/stream` sends no `mh_session` and gets a 401, which it renders as a blocked
+/// badge instead of a play button. A capability in the query string is the only
+/// credential that survives the handoff.
+///
+/// The signed message is `"playback:{media_id}:{exp}"`, so a token is useless for
+/// any other entry and — because a session token signs the bare `exp` — the two
+/// token types can never be replayed as each other.
+pub fn mint_playback_token(access_code: &str, media_id: &str, now_unix: i64) -> String {
+    let exp = now_unix + PLAYBACK_TTL_SECS;
+    let sig = sign(access_code, &playback_msg(media_id, exp));
+    format!("{exp}.{sig}")
+}
+
+/// Verify a playback token against the media entry it is scoped to.
+pub fn verify_playback_token(
+    token: &str,
+    access_code: &str,
+    media_id: &str,
+    now_unix: i64,
+) -> bool {
+    let Some((exp_str, sig)) = token.split_once('.') else {
+        return false;
+    };
+    if exp_str.is_empty() || sig.is_empty() {
+        return false;
+    }
+    let Ok(exp) = exp_str.parse::<i64>() else {
+        return false;
+    };
+    let expected = sign(access_code, &playback_msg(media_id, exp));
+    if expected.as_bytes().ct_eq(sig.as_bytes()).unwrap_u8() != 1 {
+        return false;
+    }
+    exp > now_unix
+}
+
+fn playback_msg(media_id: &str, exp: i64) -> String {
+    format!("playback:{media_id}:{exp}")
 }
 
 /// Constant-time comparison of a submitted code against the configured code.
@@ -209,6 +257,67 @@ pub async fn require_auth(
     }
 }
 
+/// The media id from `/api/v1/media/{id}/...`, if the path has that shape.
+fn media_id_from_path(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/api/v1/media/")?;
+    let id = rest.split('/').next()?;
+    (!id.is_empty()).then_some(id)
+}
+
+/// The `token` query parameter, if present.
+fn token_from_query(query: &str) -> Option<&str> {
+    query.split('&').find_map(|pair| {
+        pair.strip_prefix("token")
+            .and_then(|rest| rest.strip_prefix('='))
+            .filter(|v| !v.is_empty())
+    })
+}
+
+/// The `token` query parameter, when it has the shape a playback token can have
+/// (`{digits}.{hex}`). The charset check keeps an arbitrary caller-supplied value
+/// from being reflected into a response body (the HLS playlist embeds the token
+/// in the segment URLs it generates).
+pub fn playback_token_query(query: Option<&str>) -> Option<&str> {
+    let token = token_from_query(query?)?;
+    let (exp, sig) = token.split_once('.')?;
+    let well_formed = !exp.is_empty()
+        && !sig.is_empty()
+        && exp.bytes().all(|b| b.is_ascii_digit())
+        && sig.bytes().all(|b| b.is_ascii_hexdigit());
+    well_formed.then_some(token)
+}
+
+/// Guard for media byte-serving routes: a valid session cookie **or** a valid
+/// `?token=` scoped to the media id in the path.
+///
+/// Only the endpoints an external player has to fetch by URL are wired to this —
+/// stream, HLS segments, subtitle text. Everything that mutates state stays on
+/// the cookie-only [`require_auth`], so a shared playback URL can read one title
+/// and nothing else.
+pub async fn require_media_auth(
+    State(state): State<AuthState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if has_valid_session(request.headers(), &state.access_code) {
+        return next.run(request).await;
+    }
+
+    let uri = request.uri();
+    let authorized = match (media_id_from_path(uri.path()), uri.query()) {
+        (Some(media_id), Some(query)) => token_from_query(query).is_some_and(|token| {
+            verify_playback_token(token, &state.access_code, media_id, now_unix())
+        }),
+        _ => false,
+    };
+
+    if authorized {
+        next.run(request).await
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
 /// Public routes: login/status/logout + unguarded health probe.
 pub fn auth_router(state: AuthState) -> Router {
     Router::new()
@@ -288,6 +397,96 @@ mod tests {
     #[test]
     fn clear_cookie_expires_immediately() {
         assert!(clear_cookie_header().contains("Max-Age=0"));
+    }
+
+    const MEDIA: &str = "badab8c6-7c54-4305-8e80-04a5c2ea2a02";
+
+    #[test]
+    fn playback_token_roundtrips() {
+        let t = mint_playback_token(CODE, MEDIA, NOW);
+        assert!(verify_playback_token(&t, CODE, MEDIA, NOW + 10));
+    }
+
+    #[test]
+    fn playback_token_is_scoped_to_one_entry() {
+        let t = mint_playback_token(CODE, MEDIA, NOW);
+        let other = "11111111-2222-3333-4444-555555555555";
+        assert!(!verify_playback_token(&t, CODE, other, NOW + 10));
+    }
+
+    #[test]
+    fn playback_token_expires() {
+        let t = mint_playback_token(CODE, MEDIA, NOW);
+        assert!(!verify_playback_token(
+            &t,
+            CODE,
+            MEDIA,
+            NOW + PLAYBACK_TTL_SECS + 1
+        ));
+    }
+
+    #[test]
+    fn playback_token_needs_the_right_code() {
+        let t = mint_playback_token(CODE, MEDIA, NOW);
+        assert!(!verify_playback_token(&t, "wrong-code", MEDIA, NOW + 10));
+    }
+
+    #[test]
+    fn playback_and_session_tokens_are_not_interchangeable() {
+        // Domain separation: neither token type verifies as the other, so a
+        // read-only playback URL can never be escalated into a session.
+        let session = mint_token(CODE, NOW);
+        assert!(!verify_playback_token(&session, CODE, MEDIA, NOW + 10));
+
+        let playback = mint_playback_token(CODE, MEDIA, NOW);
+        assert!(!verify_token(&playback, CODE, NOW + 10));
+    }
+
+    #[test]
+    fn malformed_playback_token_rejected() {
+        assert!(!verify_playback_token("garbage", CODE, MEDIA, NOW));
+        assert!(!verify_playback_token("", CODE, MEDIA, NOW));
+        assert!(!verify_playback_token("123.", CODE, MEDIA, NOW));
+        assert!(!verify_playback_token(".abc", CODE, MEDIA, NOW));
+        assert!(!verify_playback_token("notanumber.abc", CODE, MEDIA, NOW));
+    }
+
+    #[test]
+    fn media_id_parsed_from_path() {
+        assert_eq!(media_id_from_path("/api/v1/media/abc/stream"), Some("abc"));
+        assert_eq!(
+            media_id_from_path("/api/v1/media/abc/segment/seg0.ts"),
+            Some("abc")
+        );
+        assert_eq!(
+            media_id_from_path("/api/v1/media/abc/subtitles/0"),
+            Some("abc")
+        );
+        assert_eq!(media_id_from_path("/api/v1/library/abc"), None);
+        assert_eq!(media_id_from_path("/api/v1/media/"), None);
+    }
+
+    #[test]
+    fn token_extracted_from_query() {
+        assert_eq!(token_from_query("token=abc"), Some("abc"));
+        assert_eq!(token_from_query("x=1&token=abc&y=2"), Some("abc"));
+        assert_eq!(token_from_query("x=1"), None);
+        assert_eq!(token_from_query("token="), None);
+    }
+
+    #[test]
+    fn playback_token_query_rejects_odd_charsets() {
+        // Only `{digits}.{hex}` may be echoed back into an HLS playlist.
+        let good = mint_playback_token(CODE, MEDIA, NOW);
+        assert_eq!(
+            playback_token_query(Some(&format!("token={good}"))),
+            Some(good.as_str())
+        );
+        assert_eq!(playback_token_query(Some("token=123.zz")), None);
+        assert_eq!(playback_token_query(Some("token=abc.def")), None);
+        assert_eq!(playback_token_query(Some("token=123.abc\"onload")), None);
+        assert_eq!(playback_token_query(Some("token=nodot")), None);
+        assert_eq!(playback_token_query(None), None);
     }
 
     #[test]
@@ -404,6 +603,83 @@ mod router_tests {
             .oneshot(
                 Request::builder()
                     .uri("/api/v1/dummy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    const MEDIA_ID: &str = "badab8c6-7c54-4305-8e80-04a5c2ea2a02";
+
+    // Mirrors how server.rs wires the media byte-serving routes.
+    fn media_app() -> Router {
+        async fn dummy() -> &'static str {
+            "bytes"
+        }
+        Router::new()
+            .route("/api/v1/media/{id}/stream", get_route(dummy))
+            .route_layer(middleware::from_fn_with_state(state(), require_media_auth))
+            .with_state(())
+    }
+
+    async fn media_status(uri: &str, cookie: Option<&str>) -> StatusCode {
+        let mut req = Request::builder().uri(uri);
+        if let Some(c) = cookie {
+            req = req.header("cookie", c);
+        }
+        media_app()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn media_route_401_without_cookie_or_token() {
+        let uri = format!("/api/v1/media/{MEDIA_ID}/stream");
+        assert_eq!(media_status(&uri, None).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn media_route_200_with_valid_playback_token() {
+        // The AirPlay case: no cookie, capability in the query string.
+        let token = mint_playback_token("secret-code", MEDIA_ID, now_unix());
+        let uri = format!("/api/v1/media/{MEDIA_ID}/stream?token={token}");
+        assert_eq!(media_status(&uri, None).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn media_route_401_with_token_for_another_entry() {
+        let other = "11111111-2222-3333-4444-555555555555";
+        let token = mint_playback_token("secret-code", other, now_unix());
+        let uri = format!("/api/v1/media/{MEDIA_ID}/stream?token={token}");
+        assert_eq!(media_status(&uri, None).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn media_route_401_with_forged_token() {
+        let uri = format!("/api/v1/media/{MEDIA_ID}/stream?token=99999999999.deadbeef");
+        assert_eq!(media_status(&uri, None).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn media_route_200_with_session_cookie() {
+        let token = mint_token("secret-code", now_unix());
+        let uri = format!("/api/v1/media/{MEDIA_ID}/stream");
+        let cookie = format!("mh_session={token}");
+        assert_eq!(media_status(&uri, Some(&cookie)).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn playback_token_does_not_open_the_cookie_guarded_api() {
+        // A leaked playback URL must not reach anything that mutates state.
+        let token = mint_playback_token("secret-code", MEDIA_ID, now_unix());
+        let res = protected_app()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/dummy?token={token}"))
                     .body(Body::empty())
                     .unwrap(),
             )

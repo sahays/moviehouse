@@ -49,13 +49,16 @@ All under the existing axum router in `src/web/`.
 | GET | `/api/v1/auth/status` | public | Returns `{ "authenticated": bool }` by validating the cookie. Lets the SPA decide login vs app. |
 | POST | `/api/v1/auth/logout` | public | Clears `mh_session` (Max-Age=0), returns `200`. |
 | GET | `/health` | public | Returns `200 "ok"`. Unguarded liveness probe for the container/deploy (the old `/api/v1/library/health` is now behind the guard). |
+| POST | `/api/v1/media/{id}/playback-token` | cookie | Mints a 12-hour capability scoped to one media entry, for external players that cannot send the cookie. See *Playback tokens* below. |
 
 ## Guard (axum middleware)
 
 - A `middleware::from_fn_with_state` layer applied via `.route_layer(...)` to the
   **protected** API routes only.
 - **Protected:** every `/api/v1/*` route that exists today (torrents, library, media,
-  ws, settings, system, filesystem, metadata, transcode).
+  ws, settings, system, filesystem, metadata, transcode). Three media byte-serving
+  routes later moved to a second guard that also accepts a playback token — see
+  *Playback tokens* below.
 - **Public (not guarded):** `/api/v1/auth/*`, `/health`, and the SPA/static fallback
   (`static_handler`) — the React bundle is just JS/CSS with no secrets and must load
   so the login screen can render.
@@ -64,6 +67,47 @@ All under the existing axum router in `src/web/`.
 - Streaming (`/api/v1/media/*`) and the WebSocket (`/api/v1/ws`) are protected; the
   browser sends the cookie on `<video>`/`fetch`/WS handshakes (same-origin), so
   playback and progress work once logged in.
+
+## Playback tokens (added 2026-07-27)
+
+The cookie-only guard above breaks **AirPlay and Chromecast**. Those receivers do
+not proxy the stream through the browser — Safari hands the Apple TV the media
+*URL* and the TV fetches it itself, as a separate HTTP client with its own (empty)
+cookie jar. It sends no `mh_session`, gets `401`, and shows a blocked badge where
+the play button belongs. Observed in nginx's log as
+`"GET /api/v1/media/{id}/stream" 401 0 "-" "AppleCoreMedia/... (Apple TV; ...)"`.
+`SameSite=None` does not help: the receiver is a different *device*, not a
+cross-site context.
+
+The fix is a capability in the query string — the only credential that survives
+the handoff.
+
+- **Minting:** `POST /api/v1/media/{id}/playback-token`, behind the normal cookie
+  guard, returns `{ "token", "expires_at" }`. Only an authenticated session can
+  mint one.
+- **Shape:** `"{exp}.{hex(hmac)}"`, same `sign()` helper as the session cookie.
+  The signed message is `"playback:{media_id}:{exp}"` — a session token signs the
+  bare `exp`, so the two spaces are **domain-separated** and neither type verifies
+  as the other. A token is also useless for any entry but the one it names.
+- **TTL:** 12 hours (`PLAYBACK_TTL_SECS`) — a film plus pauses, and a leaked URL
+  dies the same day. Rotating `MOVIEHOUSE_ACCESS_CODE` invalidates every
+  outstanding playback token too, since it is the HMAC key.
+- **Accepting:** a second middleware, `require_media_auth`, takes *cookie **or**
+  valid `?token=` scoped to the media id in the path*. It is wired only to the
+  three byte-serving routes an external player fetches by URL: `/stream`,
+  `/segment/{filename}`, `/subtitles/{index}`. Everything else — including
+  `PUT /progress`, subtitle upload, and the whole torrent/settings API — stays on
+  the cookie-only `require_auth`. A leaked playback URL therefore reads one title
+  and can change nothing.
+- **HLS:** `stream_media` embeds the caller's token in the segment URLs it
+  rewrites into the `.m3u8`, or the receiver 401s on every segment. Only a
+  well-formed `{digits}.{hex}` token is echoed back (`playback_token_query`), so a
+  caller cannot reflect arbitrary text into a response body.
+- **Frontend:** `VideoPlayer` mints a token before mounting the `<video>` and
+  appends it to the `src` and `<track>` URLs. It holds the element back until the
+  token resolves rather than swapping `src` afterwards — changing `src` on a
+  playing element restarts the load and drops any active AirPlay route. If minting
+  fails it falls back to plain URLs, which still play in the browser via cookie.
 
 **Router wiring (`src/web/server.rs`):** split the current single `api` router into
 `protected` (today's routes, plus `.route_layer(auth middleware)`) and `public`
@@ -145,9 +189,15 @@ Amend `2026-07-26-moviehouse-production-deploy-design.md` and its plan:
 - **Guard integration test (axum):** a protected route returns `401` without a cookie
   and `200`/expected with a valid cookie; `/health` and `/api/v1/auth/status` return
   `200` without a cookie.
+- **Playback tokens:** mint→verify round-trip; token for entry A rejected on entry B;
+  expired and forged tokens rejected; a session token does not verify as a playback
+  token and vice versa; `?token=` opens `/stream` with no cookie but leaves the
+  cookie-only API at `401`; only `{digits}.{hex}` survives `playback_token_query`.
 - **Frontend:** `eslint` + `prettier --check` + `tsc -b` (via `npm run build`) pass.
 - **Manual (post-deploy):** unauth request to a protected path → 401; login → cookie;
-  library loads; a protected media stream plays; rotating the code forces re-login.
+  library loads; a protected media stream plays; AirPlay from Safari to an Apple TV
+  plays (nginx log shows `AppleCoreMedia` getting `206`, not `401`); rotating the
+  code forces re-login.
 
 ## Open items for reviewer
 
