@@ -84,9 +84,5 @@ pub enum Commands {
         /// Open browser on start
         #[arg(long)]
         open: bool,
-
-        /// Allow system to sleep while serving (by default, idle sleep is prevented)
-        #[arg(long)]
-        allow_sleep: bool,
     },
 }

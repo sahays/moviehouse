@@ -67,13 +67,9 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(cmd_magnet(magnet, &cli, no_dht))?;
         }
-        Commands::Serve {
-            ref bind,
-            open,
-            allow_sleep,
-        } => {
+        Commands::Serve { ref bind, open } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(cmd_serve(bind, open, allow_sleep))?;
+            rt.block_on(cmd_serve(bind, open))?;
         }
     }
 
@@ -154,33 +150,13 @@ async fn cmd_magnet(magnet: MagnetLink, cli: &Cli, no_dht: bool) -> anyhow::Resu
 /// Minimum length for `MOVIEHOUSE_ACCESS_CODE` (the sole auth secret + HMAC key).
 const MIN_ACCESS_CODE_LEN: usize = 16;
 
-async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<()> {
+async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         cancel_clone.cancel();
     });
-
-    // Prevent macOS from sleeping while the server is running
-    #[cfg(target_os = "macos")]
-    let _caffeinate = if allow_sleep {
-        None
-    } else {
-        match std::process::Command::new("caffeinate")
-            .args(["-i", "-w", &std::process::id().to_string()])
-            .spawn()
-        {
-            Ok(child) => {
-                eprintln!("Sleep prevention active (caffeinate pid {})", child.id());
-                Some(child)
-            }
-            Err(e) => {
-                eprintln!("Warning: could not prevent sleep: {e}");
-                None
-            }
-        }
-    };
 
     let config = Config::load();
     // The access code is the single gate AND the HMAC key — require real entropy
