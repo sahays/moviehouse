@@ -263,7 +263,7 @@ fn move_file(src: &std::path::Path, dest_dir: &std::path::Path) -> MoveResult {
     if dest == src || dest.exists() {
         return MoveResult::AlreadyThere;
     }
-    let size = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+    let size = std::fs::metadata(src).map_or(0, |m| m.len());
     // Try rename first (fast, same filesystem), fall back to copy+delete
     if std::fs::rename(src, &dest).is_ok() {
         return MoveResult::Moved(dest, size);

@@ -33,7 +33,7 @@ pub fn run_choking_algorithm(
         })
         .collect();
 
-    ranked.sort_by(|a, b| b.1.cmp(&a.1)); // highest first
+    ranked.sort_by_key(|b| std::cmp::Reverse(b.1)); // highest first
 
     // Top UNCHOKE_SLOTS get unchoked
     let mut unchoked: Vec<SocketAddr> = Vec::new();

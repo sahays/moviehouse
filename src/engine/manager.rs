@@ -258,7 +258,7 @@ impl SessionManager {
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs(),
-                            file_size: std::fs::metadata(video_file).map(|m| m.len()).unwrap_or(0),
+                            file_size: std::fs::metadata(video_file).map_or(0, |m| m.len()),
                             poster_url: None,
                             overview: None,
                             rating: None,

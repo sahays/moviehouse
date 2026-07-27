@@ -24,7 +24,7 @@ fn client() -> reqwest::Client {
 ///
 /// `api.themoviedb.org` resets a large share of TLS handshakes on some networks
 /// — `Connection reset by peer` mid-handshake, at a similar rate across every
-/// CloudFront edge IP it resolves to. One attempt therefore fails often enough
+/// `CloudFront` edge IP it resolves to. One attempt therefore fails often enough
 /// that library entries silently end up bare. Worse, the call sites cannot tell
 /// a dropped connection from an empty result set, so a reset gets reported as
 /// "no results" for a title TMDB actually has.

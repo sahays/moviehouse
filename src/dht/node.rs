@@ -143,10 +143,10 @@ async fn run_dht_node(
     cancel: CancellationToken,
     lightspeed: bool,
 ) {
-    let mut token_rotation = tokio::time::interval(Duration::from_secs(5 * 60));
+    let mut token_rotation = tokio::time::interval(Duration::from_mins(5));
     token_rotation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    let mut refresh_interval = tokio::time::interval(Duration::from_secs(15 * 60));
+    let mut refresh_interval = tokio::time::interval(Duration::from_mins(15));
     refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {

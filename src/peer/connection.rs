@@ -156,7 +156,7 @@ async fn run_inner(
         .await;
 
     // Main message loop
-    let mut keepalive_interval = tokio::time::interval(Duration::from_secs(60));
+    let mut keepalive_interval = tokio::time::interval(Duration::from_mins(1));
     keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {

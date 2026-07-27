@@ -221,12 +221,11 @@ impl KrpcSocket {
                         .await;
                 }
             }
-            "e" => {
-                // Error response
-                if txn_id.len() == 2 {
-                    let key = [txn_id[0], txn_id[1]];
-                    self.pending.remove(&key);
-                }
+            // Error response. A txn id that isn't the 2 bytes we mint can't
+            // match anything pending, so it falls through to the catch-all.
+            "e" if txn_id.len() == 2 => {
+                let key = [txn_id[0], txn_id[1]];
+                self.pending.remove(&key);
             }
             _ => {}
         }

@@ -116,7 +116,7 @@ pub fn detect_video_files(dir: &std::path::Path) -> Vec<PathBuf> {
     let video_extensions = ["mkv", "mp4", "avi", "m4v", "mov", "wmv", "webm"];
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
     collect_video_files_recursive(dir, &video_extensions, &mut files);
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|b| std::cmp::Reverse(b.1));
     files.into_iter().map(|(p, _)| p).collect()
 }
 
@@ -139,7 +139,7 @@ fn collect_video_files_recursive(
             && let Some(ext) = path.extension().and_then(|e| e.to_str())
             && exts.contains(&ext.to_lowercase().as_str())
         {
-            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let size = std::fs::metadata(&path).map_or(0, |m| m.len());
             if size >= MIN_VIDEO_SIZE {
                 files.push((path, size));
             }

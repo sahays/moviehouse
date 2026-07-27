@@ -95,7 +95,5 @@ pub async fn probe_file(path: &std::path::Path) -> Option<ProbeResult> {
 
 /// Get number of CPU cores for parallel encoding.
 pub fn cpu_count() -> usize {
-    std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4)
+    std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
 }

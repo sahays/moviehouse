@@ -32,11 +32,9 @@ pub fn is_under_allowed_root(canonical: &Path) -> bool {
 /// True when `canonical` is inside one of `roots` (each root canonicalized so
 /// symlinked roots are compared by their real location).
 fn under_allowed_root(canonical: &Path, roots: &[PathBuf]) -> bool {
-    roots.iter().any(|root| {
-        std::fs::canonicalize(root)
-            .map(|rc| canonical.starts_with(&rc))
-            .unwrap_or(false)
-    })
+    roots
+        .iter()
+        .any(|root| std::fs::canonicalize(root).is_ok_and(|rc| canonical.starts_with(&rc)))
 }
 
 /// Validate a configurable directory from a settings body. Relative paths (e.g.

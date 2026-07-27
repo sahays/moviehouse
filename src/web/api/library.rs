@@ -128,7 +128,7 @@ pub async fn cleanup_sources(State(state): State<Arc<AppState>>) -> impl IntoRes
 
         let source = &entry.media_file;
         if source.exists() {
-            let size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
+            let size = std::fs::metadata(source).map_or(0, |m| m.len());
             match std::fs::remove_file(source) {
                 Ok(()) => {
                     deleted_count += 1;
@@ -535,7 +535,7 @@ pub async fn scan_folder(
         }
 
         let is_web = crate::engine::library::is_web_compatible(video_file);
-        let file_size = std::fs::metadata(video_file).map(|m| m.len()).unwrap_or(0);
+        let file_size = std::fs::metadata(video_file).map_or(0, |m| m.len());
 
         let media_type = if episode_info.is_show {
             crate::engine::library::MediaType::Show

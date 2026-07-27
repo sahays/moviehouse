@@ -22,7 +22,7 @@ impl TokenManager {
             current_secret: current,
             previous_secret: previous,
             last_rotation: Instant::now(),
-            rotation_interval: Duration::from_secs(5 * 60),
+            rotation_interval: Duration::from_mins(5),
         }
     }
 
