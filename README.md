@@ -106,8 +106,8 @@ Ports: 443 (via bharatsc nginx) for the web UI; `6881/tcp+udp` mapped directly f
 ## CLI Commands
 
 ```bash
-# Web UI server (default bind 127.0.0.1:9000; --allow-sleep to skip macOS sleep prevention)
-moviehouse serve [--bind 0.0.0.0:9000] [--open] [--allow-sleep]
+# Web UI server (default bind 127.0.0.1:9000)
+moviehouse serve [--bind 0.0.0.0:9000] [--open]
 
 # Download from .torrent file
 moviehouse download ubuntu.torrent -o ~/Downloads [--lightspeed]

@@ -50,8 +50,8 @@ bencode/   → torrent/  → tracker/ + dht/  → peer/  → piece/  → disk/
 
 `web/` — the `serve` command's HTTP layer (axum 0.8):
 - `server.rs` — `AppState` (manager, store, transcode handle, access_code, max_downloads) + `create_router`. Also serves the embedded SPA (`FrontendAssets` from `frontend/dist`, SPA-fallback to `index.html`).
-- `api/` — REST handlers under `/api/v1/*` (torrents, library, media, transcode, settings, filesystem). All routes sit behind the auth middleware.
-- `auth.rs` — **stateless HMAC-SHA256 session cookie** (`mh_session`). The access code is BOTH the login gate AND the HMAC key, so rotating it invalidates every session at once. Public routes: `/api/v1/auth/{login,status,logout}` and `/health`. 30-day TTL, `HttpOnly`.
+- `api/` — REST handlers under `/api/v1/*` (torrents, library, media, transcode, settings, filesystem). All routes sit behind an auth middleware: `require_auth` (cookie only) for everything except the three media byte-serving routes, which use `require_media_auth`.
+- `auth.rs` — **stateless HMAC-SHA256 session cookie** (`mh_session`). The access code is BOTH the login gate AND the HMAC key, so rotating it invalidates every session at once. Public routes: `/api/v1/auth/{login,status,logout}` and `/health`. 30-day TTL, `HttpOnly`. Also mints **playback tokens** — 12-hour capabilities scoped to one media id, signed over `"playback:{id}:{exp}"` (domain-separated from session tokens, which sign the bare `exp`). They exist because an AirPlay/Chromecast receiver fetches the media URL from its own device and has no cookie; `require_media_auth` accepts cookie **or** token on `/stream`, `/segment/{filename}`, `/subtitles/{index}` only, so a leaked playback URL is read-only and single-title.
 - `ws.rs` — WebSocket at `/api/v1/ws` for live download progress.
 - `api/paths.rs` — **security-critical**: confines caller-supplied filesystem paths (download/scan/transcode roots, folder browser) to allowed roots (home + `/media`, `/mnt`, `/Volumes`, `/data`, `/srv`). Reject `..`, canonicalize before comparing. Route any new endpoint that takes a path through this.
 
