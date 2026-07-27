@@ -9,6 +9,82 @@ use crate::engine::types::TranscodeState;
 
 use super::probe::{ProbeResult, SubtitleStream, cpu_count};
 
+/// Subtitle codecs that convert cleanly to MP4's `mov_text` (tx3g).
+///
+/// Bitmap formats (`hdmv_pgs_subtitle`, `dvd_subtitle`, `dvb_subtitle`) have no
+/// tx3g representation — ffmpeg errors out on the attempt and fails the whole
+/// job — so anything not listed here is skipped rather than mapped.
+const MOV_TEXT_CONVERTIBLE: &[&str] = &[
+    "subrip",
+    "srt",
+    "ass",
+    "ssa",
+    "webvtt",
+    "mov_text",
+    "text",
+    "subviewer",
+    "subviewer1",
+    "microdvd",
+];
+
+/// Explicit stream mapping for an MP4 output, embedding text subtitles as
+/// `mov_text`. Empty when there is nothing embeddable.
+///
+/// `AirPlay` hands the receiver only the media URL. An Apple TV plays the MP4 with
+/// `AVFoundation` and never learns that the sidecar `.vtt` files exist — those are
+/// `<track>` elements, rendered by the browser, and the browser is out of the
+/// picture once playback moves to the TV. A tx3g track *inside* the container is
+/// the only subtitle an `AirPlay` receiver can find, and it shows up in the TV's
+/// own subtitle menu.
+///
+/// Streams are mapped by index rather than with `-map 0:s` so a single
+/// unconvertible bitmap track cannot take the job down with it. Note that adding
+/// any `-map` disables ffmpeg's automatic stream selection, so video and audio
+/// have to be named explicitly too.
+fn subtitle_map_args(probe: Option<&ProbeResult>) -> Vec<String> {
+    let Some(probe) = probe else {
+        return Vec::new();
+    };
+
+    let embeddable: Vec<&SubtitleStream> = probe
+        .subtitle_streams
+        .iter()
+        .filter(|s| {
+            let ok = MOV_TEXT_CONVERTIBLE.contains(&s.codec.as_str());
+            if !ok {
+                eprintln!(
+                    "  Subtitles: skipping stream {} ({}) — no mov_text equivalent",
+                    s.index, s.codec
+                );
+            }
+            ok
+        })
+        .collect();
+
+    if embeddable.is_empty() {
+        return Vec::new();
+    }
+
+    let mut args: Vec<String> = vec!["-map".into(), "0:v:0".into(), "-map".into(), "0:a:0".into()];
+
+    // Language tags are deliberately NOT set here. `-map` carries the source
+    // tag through natively, and it is already the ISO 639-2 three-letter form
+    // that MP4's language box requires. Overriding it with
+    // `normalize_language_code` would be actively wrong: that helper returns
+    // two-letter ISO 639-1 codes for HTML `srcLang`, which the MP4 muxer
+    // rejects — it drops them and the track ends up with no language at all.
+    for stream in &embeddable {
+        args.extend(["-map".into(), format!("0:{}", stream.index)]);
+    }
+
+    args.extend(["-c:s".into(), "mov_text".into()]);
+    eprintln!(
+        "  Subtitles: embedding {} track(s) as mov_text for AirPlay",
+        embeddable.len()
+    );
+    args
+}
+
 /// Re-encode to H.264 MP4 with progress reporting.
 #[allow(clippy::too_many_lines)]
 pub async fn run_ffmpeg_encode(
@@ -46,6 +122,8 @@ pub async fn run_ffmpeg_encode(
     } else {
         args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
     }
+
+    args.extend(subtitle_map_args(probe));
 
     args.extend([
         "-movflags".into(),
@@ -143,6 +221,8 @@ pub async fn run_remux(
         );
         args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
     }
+
+    args.extend(subtitle_map_args(probe));
 
     args.extend(["-movflags".into(), "+faststart".into()]);
     args.push(output.to_string_lossy().into());
