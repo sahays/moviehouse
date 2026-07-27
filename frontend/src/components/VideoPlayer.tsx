@@ -37,6 +37,10 @@ export function VideoPlayer({
   const [playbackToken, setPlaybackToken] = useState<string | null | undefined>(
     undefined,
   );
+  // True once the media itself is found to carry subtitle tracks (see the
+  // detection effect below) — the sidecar <track> elements are dropped so the
+  // player's menu doesn't list every language twice.
+  const [hasInBandSubs, setHasInBandSubs] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +103,40 @@ export function VideoPlayer({
     },
     [mediaId],
   );
+
+  // Suppress the sidecar <track> elements when the container already carries its
+  // own subtitle tracks.
+  //
+  // The transcoder embeds mov_text tracks in the MP4 so AirPlay receivers can
+  // find them. Safari surfaces those in its native subtitle menu, and attaching
+  // the .vtt sidecars on top would list every language twice. Chrome does not
+  // render in-band tx3g at all, so the sidecars must stay there — which makes
+  // this a runtime check rather than a build-time choice.
+  //
+  // Per the HTML spec, media-resource-specific tracks are added to
+  // `video.textTracks`; anything in that list that did not come from one of our
+  // own <track> elements is in-band.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const detect = () => {
+      const sidecars = new Set(
+        Array.from(video.querySelectorAll("track")).map((el) => el.track),
+      );
+      if (Array.from(video.textTracks).some((t) => !sidecars.has(t))) {
+        setHasInBandSubs(true);
+      }
+    };
+
+    detect();
+    video.addEventListener("loadedmetadata", detect);
+    video.textTracks.addEventListener("addtrack", detect);
+    return () => {
+      video.removeEventListener("loadedmetadata", detect);
+      video.textTracks.removeEventListener("addtrack", detect);
+    };
+  }, [playbackToken]);
 
   // Set up progress tracking and resume. Re-runs once the token resolves, since
   // that is when the <video> element actually mounts.
@@ -201,16 +239,17 @@ export function VideoPlayer({
             className="w-full max-h-[80vh] rounded-lg"
             crossOrigin="anonymous"
           >
-            {subtitles.map((sub, i) => (
-              <track
-                key={sub.index}
-                kind="subtitles"
-                src={`/api/v1/media/${mediaId}/subtitles/${sub.index}${tokenQuery}`}
-                label={sub.label}
-                srcLang={sub.language ?? undefined}
-                default={i === 0}
-              />
-            ))}
+            {!hasInBandSubs &&
+              subtitles.map((sub, i) => (
+                <track
+                  key={sub.index}
+                  kind="subtitles"
+                  src={`/api/v1/media/${mediaId}/subtitles/${sub.index}${tokenQuery}`}
+                  label={sub.label}
+                  srcLang={sub.language ?? undefined}
+                  default={i === 0}
+                />
+              ))}
           </video>
         )}
       </div>
