@@ -1,7 +1,79 @@
+use std::time::Duration;
+
 use serde::Deserialize;
 
 const TMDB_BASE: &str = "https://api.themoviedb.org/3";
 const IMAGE_BASE: &str = "https://image.tmdb.org/t/p/w500";
+
+/// Per-request ceiling. `reqwest` has no default timeout, so without this a
+/// stalled connection would hang a library refresh indefinitely.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Attempts per request, including the first.
+const MAX_ATTEMPTS: u32 = 4;
+
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// GET a TMDB URL and decode the JSON body, retrying failures that a retry can
+/// actually fix.
+///
+/// `api.themoviedb.org` resets a large share of TLS handshakes on some networks
+/// — `Connection reset by peer` mid-handshake, at a similar rate across every
+/// CloudFront edge IP it resolves to. One attempt therefore fails often enough
+/// that library entries silently end up bare. Worse, the call sites cannot tell
+/// a dropped connection from an empty result set, so a reset gets reported as
+/// "no results" for a title TMDB actually has.
+///
+/// Transport errors and 429/5xx are retried with a linear backoff; 4xx is
+/// returned as a miss because repeating it would not change the answer. URLs are
+/// never logged — they carry the API key.
+async fn get_json<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+    what: &str,
+) -> Option<T> {
+    for attempt in 1..=MAX_ATTEMPTS {
+        let retry_reason = match client.get(url).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    match resp.json::<T>().await {
+                        Ok(value) => return Some(value),
+                        Err(e) => {
+                            tracing::warn!(what, error = %e, "TMDB: response decode failed");
+                            return None;
+                        }
+                    }
+                } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status.is_server_error()
+                {
+                    format!("HTTP {status}")
+                } else {
+                    tracing::warn!(what, %status, "TMDB: request rejected");
+                    return None;
+                }
+            }
+            Err(e) => e.to_string(),
+        };
+
+        if attempt == MAX_ATTEMPTS {
+            tracing::warn!(
+                what,
+                attempts = MAX_ATTEMPTS,
+                reason = %retry_reason,
+                "TMDB: request failed, giving up"
+            );
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
+    }
+    None
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct SearchResult {
@@ -59,7 +131,7 @@ pub async fn fetch_metadata(
     title: &str,
     year: Option<u16>,
 ) -> Option<MovieMetadata> {
-    let client = reqwest::Client::new();
+    let client = client();
 
     // Search for the movie
     let mut url = format!(
@@ -71,7 +143,7 @@ pub async fn fetch_metadata(
         let _ = write!(url, "&year={y}");
     }
 
-    let search: SearchResult = client.get(&url).send().await.ok()?.json().await.ok()?;
+    let search: SearchResult = get_json(&client, &url, "search/movie").await?;
 
     let movie = search.results.first()?;
     let movie_id = movie.id;
@@ -90,14 +162,7 @@ pub async fn fetch_metadata(
 
     // Fetch credits for cast + director
     let credits_url = format!("{TMDB_BASE}/movie/{movie_id}/credits?api_key={api_key}");
-    let credits: CreditsResponse = client
-        .get(&credits_url)
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    let credits: CreditsResponse = get_json(&client, &credits_url, "movie/credits").await?;
 
     let cast: Vec<String> = credits
         .cast
@@ -129,14 +194,14 @@ pub async fn fetch_metadata(
 /// Search TMDB for a TV show by title.
 /// Returns metadata if found.
 pub async fn fetch_tv_metadata(api_key: &str, title: &str) -> Option<MovieMetadata> {
-    let client = reqwest::Client::new();
+    let client = client();
 
     let url = format!(
         "{TMDB_BASE}/search/tv?api_key={api_key}&query={}",
         urlencoding(title)
     );
 
-    let search: SearchResult = client.get(&url).send().await.ok()?.json().await.ok()?;
+    let search: SearchResult = get_json(&client, &url, "search/tv").await?;
     let show = search.results.first()?;
     let show_id = show.id;
 
@@ -154,14 +219,7 @@ pub async fn fetch_tv_metadata(api_key: &str, title: &str) -> Option<MovieMetada
 
     // Fetch credits for cast + director (creator for TV)
     let credits_url = format!("{TMDB_BASE}/tv/{show_id}/credits?api_key={api_key}");
-    let credits: CreditsResponse = client
-        .get(&credits_url)
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    let credits: CreditsResponse = get_json(&client, &credits_url, "tv/credits").await?;
 
     let cast: Vec<String> = credits
         .cast
@@ -232,7 +290,7 @@ pub async fn fetch_season_episodes(
     show_title: &str,
     season: u16,
 ) -> Option<std::collections::HashMap<u16, EpisodeMetadata>> {
-    let client = reqwest::Client::new();
+    let client = client();
 
     // Use stored TMDB ID if available, otherwise search by name
     let show_id = if let Some(id) = tmdb_id {
@@ -242,20 +300,13 @@ pub async fn fetch_season_episodes(
             "{TMDB_BASE}/search/tv?api_key={api_key}&query={}",
             urlencoding(show_title)
         );
-        let search: SearchResult = client.get(&url).send().await.ok()?.json().await.ok()?;
+        let search: SearchResult = get_json(&client, &url, "search/tv").await?;
         search.results.first()?.id
     };
 
     // Fetch season data using the ID directly
     let season_url = format!("{TMDB_BASE}/tv/{show_id}/season/{season}?api_key={api_key}");
-    let season_data: TmdbSeasonResponse = client
-        .get(&season_url)
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    let season_data: TmdbSeasonResponse = get_json(&client, &season_url, "tv/season").await?;
 
     let mut episodes = std::collections::HashMap::new();
     for ep in season_data.episodes.unwrap_or_default() {
