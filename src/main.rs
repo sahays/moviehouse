@@ -18,6 +18,7 @@ mod web;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
@@ -201,6 +202,8 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
         }
     }
     eprintln!("Store opened");
+    repair_legacy_dirs(&store);
+    ensure_media_dirs(&store)?;
     let (transcode_handle, transcode_runner) = transcode::runner::create(store.clone());
     tokio::spawn(transcode_runner.run());
     eprintln!("Transcode runner spawned");
@@ -247,6 +250,98 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
     // Give ffmpeg processes a moment to die
     tokio::time::sleep(Duration::from_millis(500)).await;
 
+    Ok(())
+}
+
+/// Move stored media paths off superseded built-in defaults.
+///
+/// Two values were persisted by earlier builds and are wrong for a container
+/// deployment:
+///
+/// * `download_dir` defaulted to `"."` — the working directory, which is `/app`,
+///   owned by root while the process runs as `app`. Every piece write failed
+///   with `Permission denied`.
+/// * `transcode_dir` defaulted to `$HOME/.movies/transcoded`, which lands on the
+///   small data volume that holds the sled db rather than the media mount.
+///
+/// A stored value that still equals one of those fallbacks was never a
+/// deliberate choice, so let the current default (env override included) win.
+/// Anything else the operator set is left alone.
+fn repair_legacy_dirs(store: &engine::store::Store) {
+    let mut settings = store.get_settings();
+    let mut repaired_download = None;
+
+    if settings.download_dir == std::path::Path::new(".") {
+        let want = engine::types::default_download_dir();
+        eprintln!(
+            "Settings: download_dir \".\" -> {} (legacy default was not writable)",
+            want.display()
+        );
+        settings.download_dir.clone_from(&want);
+        repaired_download = Some(want);
+    }
+
+    let transcode_fallback = engine::types::home_movies_subdir("transcoded");
+    let want_transcode = engine::types::default_transcode_dir();
+    let repair_transcode =
+        settings.transcode_dir == transcode_fallback && want_transcode != transcode_fallback;
+    if repair_transcode {
+        eprintln!(
+            "Settings: transcode_dir {} -> {}",
+            transcode_fallback.display(),
+            want_transcode.display()
+        );
+        settings.transcode_dir = want_transcode;
+    }
+
+    if repaired_download.is_none() && !repair_transcode {
+        return;
+    }
+    if let Err(e) = store.put_settings(&settings) {
+        tracing::error!(error = %e, "Failed to persist repaired media directories");
+        return;
+    }
+
+    // Persisted downloads carry their own copy of the output dir — it is how a
+    // finished download's files are found for the library and deleted on
+    // removal. Repair those too, or they keep pointing at the unwritable path.
+    let Some(download_dir) = repaired_download else {
+        return;
+    };
+    let Ok(records) = store.list_downloads() else {
+        return;
+    };
+    for mut record in records {
+        if record.output_dir == std::path::Path::new(".") {
+            record.output_dir.clone_from(&download_dir);
+            if let Err(e) = store.put_download(&record) {
+                tracing::error!(error = %e, name = %record.name, "Failed to repair download output_dir");
+            }
+        }
+    }
+}
+
+/// Create the download and transcode directories and prove they are writable.
+///
+/// Failing loudly at boot beats the alternative: the server comes up healthy,
+/// accepts a torrent, and only then reports EACCES once per piece for the rest
+/// of the download.
+fn ensure_media_dirs(store: &engine::store::Store) -> anyhow::Result<()> {
+    let settings = store.get_settings();
+    for (label, dir) in [
+        ("download_dir", &settings.download_dir),
+        ("transcode_dir", &settings.transcode_dir),
+    ] {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("{label}: cannot create {}", dir.display()))?;
+
+        let probe = dir.join(".moviehouse-write-test");
+        std::fs::write(&probe, b"")
+            .with_context(|| format!("{label}: {} is not writable", dir.display()))?;
+        let _ = std::fs::remove_file(&probe);
+
+        eprintln!("{label}: {}", dir.display());
+    }
     Ok(())
 }
 

@@ -116,7 +116,7 @@ impl Default for AppSettings {
         Self {
             lightspeed: true,
             max_download_speed: 0,
-            download_dir: PathBuf::from("."),
+            download_dir: default_download_dir(),
             media_scan_dir: None,
             auto_transcode: true,
             default_preset: "hevc".into(),
@@ -127,11 +127,37 @@ impl Default for AppSettings {
     }
 }
 
+/// A non-empty env override, if set. Env wins over the built-in default so a
+/// deployment can point these at its mounted volume without a settings write.
+fn dir_from_env(key: &str) -> Option<PathBuf> {
+    std::env::var(key)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+/// Where downloads land by default.
+///
+/// This must be an absolute, writable path: the process runs as an unprivileged
+/// user with a root-owned working directory (`/app` in the container), so a
+/// relative default like `"."` makes every piece write fail with EACCES.
+pub fn default_download_dir() -> PathBuf {
+    dir_from_env("MOVIEHOUSE_DOWNLOAD_DIR").unwrap_or_else(|| home_movies_subdir("downloads"))
+}
+
 pub fn default_transcode_dir() -> PathBuf {
+    dir_from_env("MOVIEHOUSE_TRANSCODE_DIR").unwrap_or_else(|| home_movies_subdir("transcoded"))
+}
+
+/// `$HOME/.movies/<name>` — the fallback when no env override is set. `$HOME` is
+/// writable by definition (the container sets it to the mounted data volume).
+/// Public so startup repair can recognise a stored value that is still this
+/// untouched fallback rather than a deliberate operator choice.
+pub fn home_movies_subdir(name: &str) -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".movies")
-        .join("transcoded")
+        .join(name)
 }
 
 /// Persisted record for a download (what we need to restore it).

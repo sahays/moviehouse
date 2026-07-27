@@ -127,7 +127,8 @@ mod tests {
 
     #[test]
     fn allows_relative_default() {
-        // The default download_dir "." must stay valid.
+        // Relative dirs stay accepted (the CLI still uses "." for one-off
+        // downloads); only `..` escapes are rejected.
         assert!(validate_config_dir(Path::new(".")).is_ok());
         assert!(validate_config_dir(Path::new("downloads")).is_ok());
     }

@@ -30,16 +30,23 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Unprivileged runtime user. HOME=/data so the app's $HOME-derived paths
-# (~/.movies/data, ~/.movies/transcoded, ~/.moviehouse/dht_nodes.json) land on
-# the mounted volume. /media/downloads is the default download output.
+# (~/.movies/data, ~/.moviehouse/dht_nodes.json) land on the mounted data volume.
 RUN groupadd --system app && \
     useradd --system --gid app --home-dir /data app && \
-    mkdir -p /data /media/downloads && \
+    mkdir -p /data /media/downloads /media/transcoded && \
     chown -R app:app /data /media
 
 COPY --from=builder /app/target/release/moviehouse /app/bin/moviehouse
 
 ENV HOME=/data
+
+# Media lives on the /media bind mount, not on $HOME (the data volume holds only
+# the sled db). WORKDIR is root-owned and the process runs as `app`, so these
+# must be set: a relative or $HOME-derived default would be the wrong disk at
+# best and unwritable at worst.
+ENV MOVIEHOUSE_DOWNLOAD_DIR=/media/downloads \
+    MOVIEHOUSE_TRANSCODE_DIR=/media/transcoded
+
 WORKDIR /app
 USER app
 
@@ -47,4 +54,7 @@ EXPOSE 9000 6881
 
 # Shell form so ${WEB_PORT} is expanded from the container environment
 # (provided by env_file in docker-compose). exec keeps the binary as PID 1.
-CMD ["sh", "-c", "exec /app/bin/moviehouse serve --bind 0.0.0.0:${WEB_PORT:-9000} --port 6881 --output /media/downloads"]
+# `serve` takes its output directory from settings (seeded by the env vars
+# above), not from the global --output flag, which applies to the CLI
+# download/magnet subcommands only.
+CMD ["sh", "-c", "exec /app/bin/moviehouse serve --bind 0.0.0.0:${WEB_PORT:-9000} --port 6881"]

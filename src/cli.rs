@@ -9,7 +9,8 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Output directory for downloaded files
+    /// Output directory for downloaded files (`download` and `magnet` only —
+    /// `serve` uses the download directory from settings)
     #[arg(short, long, global = true, default_value = ".")]
     pub output: PathBuf,
 
