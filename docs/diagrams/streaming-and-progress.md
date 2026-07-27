@@ -9,7 +9,7 @@ Two client-facing runtime workflows: (A) serving video with HTTP range requests 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant V as Browser &lt;video&gt;
+    participant V as Browser (video)
     participant H as stream_media (media.rs)
     participant Store as sled Store
     participant FS as filesystem
@@ -21,13 +21,13 @@ sequenceDiagram
     end
     H->>H: pick path — versions[h264] → versions[hevc] → Ready output → original (Skipped)
     alt file is .m3u8 (HLS)
-        H->>FS: read playlist; rewrite segment URLs → /media/{id}/segment/{name}
+        H->>FS: read playlist, rewrite segment URLs → /media/{id}/segment/{name}
         H-->>V: 200 application/vnd.apple.mpegurl
         Note over V,H: browser then fetches each .ts via stream_segment<br/>(inline ../ /\ traversal guard)
     else regular file
         H->>FS: File::open + metadata (len)
         alt Range header present
-            H->>H: parse start-end; clamp end to len-1
+            H->>H: parse start-end, clamp end to len-1
             alt start >= len
                 H-->>V: 416 Range Not Satisfiable
             end
@@ -54,8 +54,8 @@ sequenceDiagram
     UI->>WS: connect ws(s)://…/api/v1/ws
     WS->>Mgr: list() (active + persisted history)
     WS-->>UI: { type: snapshot, torrents: [...] }
-    WS->>Mgr: subscribe() → broadcast::Receiver&lt;SessionEvent&gt; (cap 256)
-    Note over Fwd,Mgr: producer side — session watch&lt;Status&gt; change<br/>→ event_tx.send(SessionEvent); also register/fail_magnet + final
+    WS->>Mgr: subscribe() → broadcast::Receiver<SessionEvent> (cap 256)
+    Note over Fwd,Mgr: producer side — session watch<Status> change<br/>→ event_tx.send(SessionEvent), also register/fail_magnet + final
     loop rx.recv()
         Mgr-->>WS: SessionEvent { id, status }
         WS-->>UI: { type: update, id, status } → torrents.set(id, status)

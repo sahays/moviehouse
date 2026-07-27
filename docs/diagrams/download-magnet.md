@@ -23,7 +23,7 @@ sequenceDiagram
     rect rgb(255,247,235)
     note over DM,Peers: Discover peers
     DM->>Disc: TrackerManager::run + DhtHandle get_peers loop
-    Disc-->>DM: peers via mpsc&lt;Vec&lt;SocketAddr&gt;&gt;
+    Disc-->>DM: peers via mpsc<Vec<SocketAddr>>
     DM->>Peers: add_peers + connect_pending
     end
 

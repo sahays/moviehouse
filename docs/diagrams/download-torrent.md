@@ -30,7 +30,7 @@ sequenceDiagram
 
     rect rgb(238,248,238)
     note over Mgr,Store: Start
-    Mgr->>Sess: TorrentSession::new (uuid, watch&lt;Status&gt;)
+    Mgr->>Sess: TorrentSession::new (uuid, watch<Status>)
     Mgr->>Store: put_download(record)
     Mgr->>Mgr: spawn Task A (status→event forwarder)
     Mgr->>Mgr: spawn Task B (session.run)
@@ -40,10 +40,10 @@ sequenceDiagram
 
     rect rgb(255,247,235)
     note over Sess,Disk: Discover peers (Task B)
-    Sess->>Disk: FileMapping + pre_allocate; spawn disk loop
+    Sess->>Disk: FileMapping + pre_allocate, spawn disk loop
     Sess->>Disc: TrackerManager announce "started" (spawned)
     Sess->>Disc: DhtHandle::start + get_peers loop (if DHT)
-    Disc-->>Sess: peers via mpsc&lt;Vec&lt;SocketAddr&gt;&gt;
+    Disc-->>Sess: peers via mpsc<Vec<SocketAddr>>
     end
 
     rect rgb(245,240,255)
@@ -66,7 +66,7 @@ sequenceDiagram
 
     rect rgb(255,238,244)
     note over Sess,WS: Complete + follow-up
-    Sess->>Sess: state = Completed/Cancelled; await pending writes; cancel()
+    Sess->>Sess: state = Completed/Cancelled, await pending writes, cancel()
     Sess-->>Mgr: Task B: final status
     Mgr-->>WS: broadcast final SessionEvent
     Mgr->>Store: put_download(status) + flush

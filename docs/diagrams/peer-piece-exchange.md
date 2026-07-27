@@ -37,9 +37,9 @@ sequenceDiagram
 
     rect rgb(245,240,255)
     note over Sess,Peer: Pipelined request/piece loop
-    loop fill_pipeline while outstanding &lt; depth
+    loop fill_pipeline while outstanding < depth
         Note over Sess: depth = 64 (normal) or throughput×8 clamped 64..256 (lightspeed)
-        Sess->>Picker: pick_block (rarest-first; reservoir tie-break)
+        Sess->>Picker: pick_block (rarest-first, reservoir tie-break)
         Picker-->>Sess: BlockRequest { index, offset, len }
         Sess->>Conn: RequestBlock
         Conn->>Peer: Request (16 KiB block)
@@ -67,9 +67,9 @@ sequenceDiagram
         Sess->>Picker: release/unassign pending blocks → refill other peers
     end
     opt endgame (in_progress == remaining)
-        Sess->>PM: duplicate-request remaining blocks on all peers; CancelBlock on receipt
+        Sess->>PM: duplicate-request remaining blocks on all peers, CancelBlock on receipt
     end
-    Note over Conn,Peer: keepalive every 60s; choke algorithm every 10s (optimistic unchoke each 3rd)
+    Note over Conn,Peer: keepalive every 60s, choke algorithm every 10s (optimistic unchoke each 3rd)
     end
 ```
 

@@ -58,7 +58,7 @@ sequenceDiagram
         API-->>Client: 400 TMDB API key not configured
     end
     Note over API: no "already enriched" guard — refresh always re-fetches & overwrites
-    API->>API: parse title/year; is_show = show_name.is_some()
+    API->>API: parse title/year, is_show = show_name.is_some()
     API->>T: fetch_metadata_auto(key, title, year, is_show)
     alt movie
         T->>API3: GET /search/movie → first result

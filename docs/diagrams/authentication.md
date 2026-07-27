@@ -31,13 +31,13 @@ sequenceDiagram
     UI->>Login: POST /api/v1/auth/login { code }
     Login->>Login: code_matches (constant-time ct_eq vs configured code)
     alt wrong code
-        Login->>Login: warn(ip); sleep 500ms (anti-brute-force)
+        Login->>Login: warn(ip), sleep 500ms (anti-brute-force)
         Login-->>UI: 401 { authenticated: false }
         UI-->>User: "Invalid access code."
     else correct
         Login->>Login: mint_token = "{exp}.{HMAC(code, exp)}", exp = now + 30d
         Login->>Login: request_is_secure? (x-forwarded-proto == https)
-        Login-->>UI: 200 Set-Cookie: mh_session=… HttpOnly; SameSite=Lax; [Secure]
+        Login-->>UI: 200 Set-Cookie: mh_session=… HttpOnly, SameSite=Lax, [Secure]
         UI-->>User: onSuccess → leave login screen
     end
 ```
@@ -53,7 +53,7 @@ sequenceDiagram
 
     Browser->>MW: GET /api/v1/… (Cookie: mh_session=…)
     MW->>MW: token_from_cookie_header → verify_token
-    Note over MW: split "{exp}.{sig}"; recompute HMAC(code, exp);<br/>ct_eq(sig); exp > now
+    Note over MW: split "{exp}.{sig}", recompute HMAC(code, exp),<br/>ct_eq(sig), exp > now
     alt valid & unexpired
         MW->>H: next.run(request)
         H-->>Browser: 200 + response

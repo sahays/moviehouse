@@ -16,7 +16,7 @@ sequenceDiagram
     note over Sess,Net: Startup / bootstrap
     Sess->>DHT: DhtHandle::start(addr, cancel, lightspeed)
     DHT->>RT: load_from_file(~/.moviehouse/dht_nodes.json) [lightspeed] or random NodeId
-    DHT->>Krpc: bind UDP socket; spawn recv_loop
+    DHT->>Krpc: bind UDP socket, spawn recv_loop
     DHT->>DHT: spawn run_dht_node (inbound + lookup + timers)
     alt cached >= 8 nodes (lightspeed)
         DHT->>Look: iterative_find_node (refresh only)

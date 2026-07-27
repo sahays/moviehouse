@@ -35,7 +35,7 @@ sequenceDiagram
     Run->>Run: job_rx.recv → semaphore.acquire (limit = transcode_concurrency)
     Run->>Job: spawn task (owns permit)
     alt ffmpeg not available
-        Job->>Store: update_transcode_state(Unavailable); drop permit
+        Job->>Store: update_transcode_state(Unavailable), drop permit
     end
     Job->>FF: probe_file (ffprobe -show_format -show_streams)
     FF-->>Job: duration, codecs, pix_fmt, subtitle streams
