@@ -52,13 +52,14 @@ Single binary. No cloud. Your media, your network.
 cargo install --path .
 
 # Configure
-cp .env.example .env    # Add your TMDB API key
+cp .env.example .env                                   # add your TMDB API key
+echo "MOVIEHOUSE_ACCESS_CODE=$(openssl rand -hex 24)" >> .env   # required — the app won't start without it
 
-# Run
+# Run (defaults to 127.0.0.1:9000)
 moviehouse serve --open
 
 # Network access (Apple TV, phones, tablets)
-moviehouse serve --bind 0.0.0.0:3000 --open
+moviehouse serve --bind 0.0.0.0:9000 --open
 ```
 
 Or use the local run script (builds, launches in background, opens browser):
@@ -101,8 +102,8 @@ Ports: 443 (via bharatsc nginx) for the web UI; `6881/tcp+udp` mapped directly f
 ## CLI Commands
 
 ```bash
-# Web UI server
-moviehouse serve [--bind 0.0.0.0:3000] [--open]
+# Web UI server (default bind 127.0.0.1:9000; --allow-sleep to skip macOS sleep prevention)
+moviehouse serve [--bind 0.0.0.0:9000] [--open] [--allow-sleep]
 
 # Download from .torrent file
 moviehouse download ubuntu.torrent -o ~/Downloads [--lightspeed]
@@ -125,16 +126,29 @@ moviehouse info ubuntu.torrent
 
 ### `.env` file
 
+See `.env.example` for the full annotated list. The essentials:
+
 ```
-TMDB_API_KEY=your_api_key_here
+TMDB_API_KEY=your_api_key_here              # movie/show metadata (optional but recommended)
+TMDB_READ_ACCESS_TOKEN=your_token_here      # TMDB v4 read token (optional)
+MOVIEHOUSE_ACCESS_CODE=change_me            # REQUIRED — single auth gate, min 16 chars (openssl rand -hex 24)
+MOVIEHOUSE_MAX_DOWNLOADS=2                  # max concurrent downloads
 ```
+
+Deployment-only keys (`DOMAIN`, `WEB_PORT`, `BT_PORT`, `DATA_DIR`, `MEDIA_DIR`,
+`MOVIEHOUSE_DOWNLOAD_DIR`, `MOVIEHOUSE_TRANSCODE_DIR`, `BHARATSC_DIR`) are also in
+`.env.example`. Values from the process environment take precedence over the file.
 
 ### Data locations
 
+Outside Docker, everything lives under `$HOME` (override the media dirs with the
+`MOVIEHOUSE_*_DIR` env vars):
+
 ```
-~/.movies/data/         — sled database
+~/.movies/data/         — sled database (downloads, library, settings)
+~/.movies/downloads/    — downloaded media files
 ~/.movies/transcoded/   — transcoded media files
-~/.moviehouse/          — DHT routing table cache
+~/.moviehouse/          — DHT routing table cache (dht_nodes.json)
 ```
 
 ## Architecture
@@ -147,6 +161,10 @@ moviehouse serve
 ├── sled persistence (downloads, library, settings)
 └── TMDB client (movie/show metadata)
 ```
+
+See [`docs/diagrams/`](docs/diagrams/) for per-workflow sequence diagrams (download,
+magnet metadata exchange, peer/piece exchange, DHT discovery, transcoding, library +
+TMDB, authentication, streaming & progress).
 
 ## Protocol Support
 
