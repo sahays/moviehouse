@@ -300,3 +300,19 @@ include `$HOME`.**
 Do not port-forward, reverse-proxy, or tunnel this build to a public address. The
 audit's original verdict — *"DO NOT expose publicly"* — applies with more force now
 than when it was written, because the control it assumed no longer exists.
+
+### Addendum 2026-08-06 (third) — M7 concurrency cap removed
+
+`MOVIEHOUSE_MAX_DOWNLOADS` and the `active_count() >= max_downloads` check in
+`add_torrent` are gone; concurrent downloads are unbounded. **M7 is reopened** and
+now has no mitigation at all: its "deferred/residual" note above said the disk-free
+pre-check was acceptable to skip *because the concurrency cap bounded the risk*.
+That cap no longer exists.
+
+Practically, on a LAN box with no auth (see the second addendum), anything on the
+network can queue downloads until the disk, file descriptors, or sockets run out.
+The torrent engine's own per-session limits (`max_peers`, piece caps) still bound
+each individual download; nothing bounds the number of them.
+
+This is a deliberate usability choice for a single-user home server, where the
+person adding torrents is the person who owns the disk.

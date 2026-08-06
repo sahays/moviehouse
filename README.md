@@ -155,7 +155,6 @@ See `.env.example` for the full annotated list. The essentials:
 ```
 TMDB_API_KEY=your_api_key_here              # movie/show metadata (optional but recommended)
 TMDB_READ_ACCESS_TOKEN=your_token_here      # TMDB v4 read token (optional)
-MOVIEHOUSE_MAX_DOWNLOADS=2                  # max concurrent downloads
 ```
 
 Values from the process environment take precedence over the file.

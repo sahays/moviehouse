@@ -19,8 +19,6 @@ pub struct AppState {
     pub manager: Arc<SessionManager>,
     pub store: Arc<Store>,
     pub transcode: TranscodeHandle,
-    /// Max concurrent downloads (`MOVIEHOUSE_MAX_DOWNLOADS`, default 2).
-    pub max_downloads: usize,
 }
 
 /// Liveness probe. Public and unauthenticated — as is everything else.

@@ -375,11 +375,6 @@ impl SessionManager {
         id
     }
 
-    /// Number of active in-memory sessions (running downloads / pending magnets).
-    pub fn active_count(&self) -> usize {
-        self.sessions.len()
-    }
-
     /// List active sessions (in-memory) merged with persisted history.
     #[allow(clippy::unwrap_used)] // RwLock unwrap is correct for unpoisoned locks
     pub fn list(&self) -> Vec<SessionStatus> {
