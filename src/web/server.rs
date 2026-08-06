@@ -19,16 +19,28 @@ pub struct AppState {
     pub manager: Arc<SessionManager>,
     pub store: Arc<Store>,
     pub transcode: TranscodeHandle,
-    pub access_code: String,
     /// Max concurrent downloads (`MOVIEHOUSE_MAX_DOWNLOADS`, default 2).
     pub max_downloads: usize,
 }
 
+/// Liveness probe. Public and unauthenticated — as is everything else.
+async fn health() -> &'static str {
+    "ok"
+}
+
+/// Build the API router.
+///
+/// **There is no authentication.** `MovieHouse` binds to the LAN and trusts
+/// everything that can reach it: the whole API — torrent engine, filesystem
+/// browser, settings, and the media-deleting cleanup route — is open to any
+/// device on the network. Bind to `127.0.0.1` if that is not what you want, and
+/// do not expose this to the internet.
 #[allow(clippy::too_many_lines)]
 pub fn create_router(state: &Arc<AppState>) -> Router {
     use super::api::{filesystem, library, media, settings, torrents, transcode};
 
     let api = Router::new()
+        .route("/health", axum::routing::get(health))
         .route(
             "/api/v1/torrents",
             axum::routing::get(torrents::list_torrents).post(torrents::add_torrent),
@@ -62,10 +74,6 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
         .route(
             "/api/v1/media/{id}/subtitles",
             axum::routing::get(media::list_subtitles).post(media::upload_subtitle),
-        )
-        .route(
-            "/api/v1/media/{id}/playback-token",
-            axum::routing::post(media::playback_token),
         )
         .route(
             "/api/v1/media/{id}/progress",
@@ -123,24 +131,9 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             "/api/v1/library/groups/{id}/refresh-metadata",
             axum::routing::post(library::refresh_group_metadata),
         )
-        .with_state(state.clone())
-        .route_layer(axum::middleware::from_fn_with_state(
-            super::auth::AuthState {
-                access_code: state.access_code.clone().into(),
-            },
-            super::auth::require_auth,
-        ));
-
-    let auth_state = super::auth::AuthState {
-        access_code: state.access_code.clone().into(),
-    };
-
-    // Byte-serving routes an external player fetches by URL. AirPlay and
-    // Chromecast receivers are separate HTTP clients with no session cookie, so
-    // these additionally accept a `?token=` capability scoped to the media id
-    // (minted by POST /api/v1/media/{id}/playback-token). They are read-only —
-    // nothing that mutates state is reachable with a playback token.
-    let media = Router::new()
+        // Byte-serving routes an external player fetches by URL. An AirPlay or
+        // Chromecast receiver is a separate HTTP client on another device; with
+        // nothing to authenticate against, it just fetches these directly.
         .route(
             "/api/v1/media/{id}/stream",
             axum::routing::get(media::stream_media),
@@ -153,18 +146,11 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             "/api/v1/media/{id}/subtitles/{index}",
             axum::routing::get(media::stream_subtitle),
         )
-        .with_state(state.clone())
-        .route_layer(axum::middleware::from_fn_with_state(
-            auth_state.clone(),
-            super::auth::require_media_auth,
-        ));
+        .with_state(state.clone());
 
     // CORS: allow any origin for LAN access (phones, TVs, other devices).
-    // Credentials are not allowed (no .allow_credentials), limiting CSRF risk.
     Router::new()
-        .merge(super::auth::auth_router(auth_state))
         .merge(api)
-        .merge(media)
         .fallback(static_handler)
         .layer(
             CorsLayer::new()
@@ -172,9 +158,28 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
                 .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
                 .allow_headers([header::CONTENT_TYPE]),
         )
+        // Outermost so every response carries them, including the static SPA.
+        // Replaces the headers the nginx vhost used to add.
+        .layer(axum::middleware::from_fn(
+            super::security_headers::security_headers,
+        ))
 }
 
 async fn static_handler(uri: Uri) -> Response {
+    // An unmatched `/api/v1/*` path is a client bug, not a deep link. Without
+    // this it would fall through to the SPA and answer 200 text/html, so a stale
+    // client calling a removed endpoint (the auth routes, say) would read the
+    // index page as success.
+    if uri.path().starts_with("/api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(super::api::ApiError {
+                error: "no such endpoint".into(),
+            }),
+        )
+            .into_response();
+    }
+
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 

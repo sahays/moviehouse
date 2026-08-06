@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use uuid::Uuid;
 
 pub use super::types::{AppSettings, DownloadRecord, MediaEntry, TranscodeState};
@@ -20,10 +18,10 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open (or create) the store at ~/MovieHouse/.data/
+    /// Open (or create) the store at `$MOVIEHOUSE_DATA_DIR`, default
+    /// `$HOME/.movies/data`.
     pub fn open() -> anyhow::Result<Self> {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        Self::open_at(home.join(".movies").join("data"))
+        Self::open_at(super::types::default_data_dir())
     }
 
     /// Open at a specific path.

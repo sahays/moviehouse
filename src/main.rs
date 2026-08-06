@@ -67,9 +67,13 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(cmd_magnet(magnet, &cli, no_dht))?;
         }
-        Commands::Serve { ref bind, open } => {
+        Commands::Serve {
+            ref bind,
+            open,
+            allow_sleep,
+        } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(cmd_serve(bind, open))?;
+            rt.block_on(cmd_serve(bind, open, allow_sleep))?;
         }
     }
 
@@ -147,10 +151,7 @@ async fn cmd_magnet(magnet: MagnetLink, cli: &Cli, no_dht: bool) -> anyhow::Resu
     session.run().await
 }
 
-/// Minimum length for `MOVIEHOUSE_ACCESS_CODE` (the sole auth secret + HMAC key).
-const MIN_ACCESS_CODE_LEN: usize = 16;
-
-async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
+async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
@@ -158,16 +159,27 @@ async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
         cancel_clone.cancel();
     });
 
+    // Prevent macOS from sleeping while the server is running
+    #[cfg(target_os = "macos")]
+    let _caffeinate = if allow_sleep {
+        None
+    } else {
+        match std::process::Command::new("caffeinate")
+            .args(["-i", "-w", &std::process::id().to_string()])
+            .spawn()
+        {
+            Ok(child) => {
+                eprintln!("Sleep prevention active (caffeinate pid {})", child.id());
+                Some(child)
+            }
+            Err(e) => {
+                eprintln!("Warning: could not prevent sleep: {e}");
+                None
+            }
+        }
+    };
+
     let config = Config::load();
-    // The access code is the single gate AND the HMAC key — require real entropy
-    // so it can't be brute-forced online. 16 chars is the floor; `openssl rand
-    // -hex 24` (the documented generator) produces 48.
-    if config.access_code.trim().len() < MIN_ACCESS_CODE_LEN {
-        anyhow::bail!(
-            "MOVIEHOUSE_ACCESS_CODE must be at least {MIN_ACCESS_CODE_LEN} characters \
-             (it is the sole auth secret). Generate one: openssl rand -hex 24."
-        );
-    }
     let store = Arc::new(engine::store::Store::open()?);
     // Seed TMDB key from .env into settings if not already set
     {
@@ -192,7 +204,6 @@ async fn cmd_serve(bind: &str, open: bool) -> anyhow::Result<()> {
         manager,
         store,
         transcode: transcode_handle,
-        access_code: config.access_code.clone(),
         max_downloads: config.max_downloads,
     });
     let transcode_for_shutdown = state.transcode.clone();
@@ -378,7 +389,6 @@ fn cmd_info(path: &std::path::Path) -> anyhow::Result<()> {
 struct Config {
     tmdb_api_key: String,
     tmdb_read_access_token: String,
-    access_code: String,
     max_downloads: usize,
 }
 
@@ -417,10 +427,6 @@ impl Config {
             tmdb_api_key: env_or_file("TMDB_API_KEY", &values).unwrap_or_default(),
             tmdb_read_access_token: env_or_file("TMDB_READ_ACCESS_TOKEN", &values)
                 .unwrap_or_default(),
-            access_code: env_or_file("MOVIEHOUSE_ACCESS_CODE", &values)
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
             max_downloads: env_or_file("MOVIEHOUSE_MAX_DOWNLOADS", &values)
                 .and_then(|v| v.trim().parse::<usize>().ok())
                 .filter(|n| *n > 0)

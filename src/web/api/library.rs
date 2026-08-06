@@ -51,10 +51,61 @@ pub async fn get_library_item(
     }
 }
 
+/// Delete the files a library entry owns.
+///
+/// These paths come from the store rather than the request, so this is defence
+/// in depth — but an unlink is irreversible, and confinement is the only thing
+/// between a legacy or corrupted record and deleting an arbitrary file. Anything
+/// outside the allowed roots is skipped and logged, never removed.
+///
+/// Directories are never touched: `owned_files` excludes the shared source
+/// directory, and the `is_file` check means a path that somehow names one is a
+/// no-op rather than a recursive delete.
+fn remove_owned_files(entry: &crate::engine::types::MediaEntry) -> (usize, u64) {
+    let (mut files, mut bytes) = (0usize, 0u64);
+    for path in crate::engine::cleanup::owned_files(entry) {
+        let Ok(safe) = super::paths::confine(&path) else {
+            tracing::warn!(
+                media_id = %entry.id, path = %path.display(),
+                "refusing to delete a file outside the allowed media directories"
+            );
+            continue;
+        };
+        if !safe.is_file() {
+            continue;
+        }
+        let size = std::fs::metadata(&safe).map_or(0, |m| m.len());
+        match std::fs::remove_file(&safe) {
+            Ok(()) => {
+                files += 1;
+                bytes += size;
+            }
+            Err(e) => tracing::warn!(
+                media_id = %entry.id, path = %safe.display(), error = %e,
+                "failed to delete media file"
+            ),
+        }
+    }
+    (files, bytes)
+}
+
+/// Remove a library entry. `?delete_files=true` also deletes the files it owns —
+/// that is the "clean up" action on a watched title; without it only the record
+/// goes, and a rescan can re-import the media.
 pub async fn delete_library_item(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
+    Query(opts): Query<super::torrents::DeleteOptions>,
 ) -> impl IntoResponse {
+    if opts.delete_files
+        && let Ok(Some(entry)) = state.store.get_media(&id)
+    {
+        let (files, bytes) = remove_owned_files(&entry);
+        tracing::info!(
+            media_id = %id, title = %entry.title, files, bytes,
+            "cleaned up media files for a watched entry"
+        );
+    }
     let _ = state.store.remove_media(&id);
     StatusCode::NO_CONTENT
 }

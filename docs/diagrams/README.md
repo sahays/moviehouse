@@ -10,7 +10,6 @@ Sequence diagrams for each major MovieHouse workflow. Diagrams are [Mermaid](htt
 | [dht-discovery.md](dht-discovery.md) | DHT bootstrap and iterative `get_peers` lookup for an infohash |
 | [transcoding.md](transcoding.md) | Transcode job lifecycle: enqueue → ffprobe → ffmpeg → progress → library |
 | [library-tmdb.md](library-tmdb.md) | Folder scan/import and TMDB metadata enrichment |
-| [authentication.md](authentication.md) | Access-code login and the guarded-request middleware |
 | [streaming-and-progress.md](streaming-and-progress.md) | HTTP range streaming and the WebSocket progress feed |
 
 ## How the pieces fit together
@@ -21,7 +20,6 @@ flowchart LR
     UI[React SPA]
   end
   subgraph web[web/ · axum]
-    AUTH[auth middleware]
     API[api/* handlers]
     WS[ws feed]
   end
@@ -40,8 +38,8 @@ flowchart LR
   TC[transcode runner]
   TMDB[tmdb client]
 
-  UI --> AUTH --> API
-  UI -. cookie .-> WS
+  UI --> API
+  UI --> WS
   API --> MGR --> SESS
   SESS --> TRK & DHT --> PEER --> PIECE --> DISK
   MGR --> STORE

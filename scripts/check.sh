@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-deploy gate. Strict verify-only: nothing is auto-fixed. Run your
+# Full verify gate. Strict verify-only: nothing is auto-fixed. Run your
 # formatters during development; this only confirms the tree is already clean.
 set -euo pipefail
 
@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-echo "Running pre-deploy checks (strict)..."
+echo "Running checks (strict)..."
 
 # ── 1. Rust format — verify only ────────────────────────────────
 echo "  Checking Rust formatting (cargo fmt --check)..."

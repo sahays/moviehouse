@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FolderSearch, Trash2, LogOut } from "lucide-react";
+import { FolderSearch, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { logout } from "@/lib/api";
 import { FolderPicker } from "./FolderPicker";
 import { useSettings } from "@/contexts/SettingsContext";
 import type { AppSettings } from "../types";
@@ -218,20 +217,6 @@ export function SettingsPanel({ onScanComplete }: SettingsPanelProps) {
       </h2>
 
       <SystemInfo />
-
-      <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mt-6 mb-3 uppercase tracking-wider">
-        Account
-      </h2>
-
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => void logout()}
-        className="w-full justify-start gap-2 text-[var(--color-text-tertiary)]"
-      >
-        <LogOut size={16} />
-        <span>Log out</span>
-      </Button>
     </div>
   );
 }

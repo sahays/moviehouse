@@ -15,6 +15,11 @@ access code, with the BitTorrent port 6881 (tcp+udp) directly on the internet.
 primitives are confined to `/data` and `/media` in the container — bad, but not root
 RCE. Running the raw binary as root (systemd) removes this mitigation.
 
+> **⚠️ Addendum 2026-08-06 — the deployment model this audit describes no longer
+> exists.** MovieHouse was reverted to local-only (LAN, plain HTTP, no Docker, no
+> nginx). Read the addendum at the bottom before relying on anything above: the
+> premises in **Context** and **Key mitigating fact** are both void.
+
 ## Remediation summary (2026-07-26)
 
 All findings fixed and verified — full pre-deploy gate green (fmt, clippy `-D warnings`,
@@ -195,3 +200,103 @@ check before allocating. **Fix:** global caps + disk pre-flight.
 6. **M5–M7, L-series** — rate-limit/backoff, torrent length/piece + disk caps, generic errors,
    headers/CSP, TTL, degenerate-torrent rejection.
 7. Ensure the app is **never run as root** outside Docker; keep the container's non-root `app` user.
+
+---
+
+## Addendum 2026-08-06 — reverted to local-only
+
+The remote deployment was retired (compute + egress cost for a library only watched
+at home). Docker, docker-compose, the bharatsc nginx vhost, and the deploy scripts
+are deleted. `moviehouse serve --bind 0.0.0.0:9000` now faces the LAN directly over
+plain HTTP. Three consequences for the findings above.
+
+### 1. Exposure shrank — the internet is no longer in the threat model
+
+The app is no longer reachable from outside the house, and the BitTorrent port is
+only internet-facing if the router forwards it. The attacker set is now devices on
+the home network (including anything IoT and compromised) rather than the world.
+This lowers the practical severity of most findings; it does not close them.
+
+### 2. What nginx was doing is now in the app
+
+Deleting the vhost silently removed protections the table above credits to it.
+Each was re-homed in-process:
+
+| Was nginx | Now |
+|---|---|
+| CSP + security headers (**L4**) | `src/web/security_headers.rs`, layered over the whole router. Same policy, carried over verbatim. **No HSTS** — plain HTTP on the LAN, and HSTS would pin the browser to `https://` and lock the user out. |
+| `limit_req zone=auth` on login (**M5**) | `src/web/ratelimit.rs` — per-IP fixed window, 10 failures / 5 min → `429`. The 500 ms failure delay stays underneath it. |
+| Setting trustworthy `X-Forwarded-For` / `-Proto` | Nothing. Both headers are now **caller-controlled** and are no longer read. `auth::PeerIp` takes the TCP peer from `ConnectInfo`; the session cookie is unconditionally non-`Secure`. |
+
+That last row was a live defect for as long as the code outlived the proxy: a
+forged `X-Forwarded-For` would have poisoned the login audit log and let a guesser
+sidestep any IP-keyed throttle, and a forged `X-Forwarded-Proto: https` would have
+set `Secure` on a cookie the browser then refuses to send back over HTTP.
+
+### 3. The "key mitigating fact" no longer holds — read this one carefully
+
+The audit leans on the container's non-root `app` user to bound the file-write
+findings (H1, H2, H3, M1, M3, and the `/etc/cron.d` scenario in the detail section).
+**There is no container.** The binary runs as the desktop user, with that user's
+full privileges: `~/.zshrc`, `~/.ssh/`, LaunchAgents, and every document on the Mac
+are writable by the process.
+
+The path confinement in `src/web/api/paths.rs` is now the *only* thing standing
+between an authenticated caller and arbitrary user-level file writes. It was
+verified correct at audit time and its tests still pass — but it carries the whole
+weight now. Treat any change to `confine`/`validate_config_dir` as security-critical
+and do not widen the allowed roots casually.
+
+Mitigating this: reaching those endpoints still requires the access code, and the
+access code is now only offerable from the LAN.
+
+### Not re-reviewed
+
+This addendum reasons about the deployment change only. No new code audit was
+performed, and the BitTorrent parsing / SSRF / DoS findings are unchanged.
+
+---
+
+## Addendum 2026-08-06 (second) — access-code auth removed entirely
+
+The access code is gone: no login, no `mh_session` cookie, no playback tokens, no
+login throttle. `src/web/auth.rs` and `src/web/ratelimit.rs` are deleted and every
+route — including the WebSocket and the media byte-serving routes — is now open to
+anything that can open a TCP connection to the port.
+
+This was a deliberate choice for a home-LAN-only server. Its consequences are not
+subtle, so they are recorded here rather than left implicit.
+
+### Every finding that was gated behind "requires the access code" is now ungated
+
+The audit repeatedly treats authentication as the outer gate. There is no outer
+gate. Reachable unauthenticated by any device on the network:
+
+- **H1 / M1 / M3** — `put_settings`, `migrate_media`, `browse_filesystem`: rewrite
+  the download/transcode/scan roots and enumerate directories, bounded only by
+  `api/paths.rs`.
+- **H3** — `scan_folder`: import and then stream any video file under an allowed root.
+- **M7** — queue downloads until the disk fills, bounded only by `MOVIEHOUSE_MAX_DOWNLOADS`.
+- **New since the audit** — `DELETE /api/v1/library/{id}?delete_files=true`
+  irreversibly deletes a title's source, transcodes, and subtitles.
+
+Combined with the first addendum's point 3 (no container, so the process runs as
+the desktop user), the practical position is: **anyone on the Wi-Fi can read,
+import, and delete files anywhere under `api/paths.rs`'s allowed roots — which
+include `$HOME`.**
+
+### What is left standing
+
+1. `api/paths.rs` confinement — now the *only* server-side control. Every finding
+   above is bounded by it and nothing else. Changes to `confine` /
+   `validate_config_dir` / `allowed_roots` are the highest-risk changes in the repo.
+2. Network reachability — the server must be bound somewhere the attacker can
+   reach. `--bind 127.0.0.1:9000` reduces the attacker set to processes on the host.
+3. `security_headers.rs` — CSP and friends still ship on every response (L4 remains
+   closed).
+
+### If this ever leaves the LAN
+
+Do not port-forward, reverse-proxy, or tunnel this build to a public address. The
+audit's original verdict — *"DO NOT expose publicly"* — applies with more force now
+than when it was written, because the control it assumed no longer exists.

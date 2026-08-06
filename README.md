@@ -31,8 +31,10 @@ Single binary. No cloud. Your media, your network.
 - **Click to play** — click poster to stream in browser
 - **HTTP range requests** — seeking, pause/resume
 - **Works everywhere** — Safari, Chrome (Mac/Android), Edge
-- **AirPlay** — stream to Apple TV from any Apple device, via a short-lived
-  playback token (the receiver fetches the URL itself and has no session cookie)
+- **AirPlay** — stream to Apple TV from any Apple device
+- **Continue Watching** — resumes anything started but under 90% complete
+- **Already Watched** — finished titles get their own rail, with a `⋯` menu to
+  delete the files (source, every transcode, and subtitles) and retire the entry
 
 ### BitTorrent Engine
 - **DHT, magnet links, PEX** — full peer discovery
@@ -45,6 +47,9 @@ Single binary. No cloud. Your media, your network.
 - **Download folder** — configurable with server-side folder browser
 - **Auto-transcode** — toggle + default encoding (HEVC/H.264)
 - **TMDB API key** — loaded from `.env` file
+- **Clean Up Sources** — bulk: deletes the original (MKV) for anything already
+  transcoded, keeping the MP4 **and** the library entry. Distinct from the
+  per-title cleanup on the Already Watched rail, which removes everything
 
 ## Quick Start
 
@@ -53,8 +58,7 @@ Single binary. No cloud. Your media, your network.
 cargo install --path .
 
 # Configure
-cp .env.example .env                                   # add your TMDB API key
-echo "MOVIEHOUSE_ACCESS_CODE=$(openssl rand -hex 24)" >> .env   # required — the app won't start without it
+cp .env.example .env    # add your TMDB API key
 
 # Run (defaults to 127.0.0.1:9000)
 moviehouse serve --open
@@ -69,39 +73,55 @@ Or use the local run script (builds, launches in background, opens browser):
 ./scripts/run-local.sh
 ```
 
-## Production Deployment
+## Watching on your TV
 
-MovieHouse deploys as a satellite of the bharatsc shared Docker stack, served at
-`https://moviehouse.niniconai.com` behind bharatsc's nginx (wildcard TLS). The app
-gates itself with an in-app access code (see `docs/superpowers/specs/` — the
-access-code-auth design) rather than nginx Basic Auth.
+MovieHouse is local-only: it runs on one machine on your home network and every
+other device reaches it over the LAN. Nothing is exposed to the internet, so there
+is no domain, no TLS, and no hosting bill.
 
-### Prerequisites
+> **There is no login.** Every device that can reach the port has full control —
+> the library, the torrent engine, the filesystem browser, and the file-deleting
+> cleanup action. That is the intended tradeoff for a home LAN, but it means you
+> should not port-forward this, and anyone on your guest Wi-Fi is an admin. Bind
+> to `127.0.0.1` if you only ever watch on the host machine.
 
-- The bharatsc stack running (provides the `shared` network, nginx, and the
-  `*.niniconai.com` wildcard cert via niniconai's `scripts/init-ssl.sh`).
-- Host directories for storage (defaults): `/srv/moviehouse/data`, `/srv/moviehouse/media`.
-
-### Steps
+Start it bound to all interfaces so other devices can reach it:
 
 ```bash
-cp .env.example .env         # set TMDB keys + MOVIEHOUSE_ACCESS_CODE (openssl rand -hex 24)
-./scripts/pre-deploy.sh      # strict fmt/clippy/test/lint gate
-./scripts/deploy.sh          # build image, start container, install nginx vhost, reload
+./scripts/run-local.sh 0.0.0.0:9000
 ```
 
-Flags: `./scripts/deploy.sh --no-build` (skip image build), `--foreground` (run attached).
+Then open `http://<your-mac>.local:9000` on the other device (run `hostname -s` to
+get the name, or use the Mac's LAN IP).
 
-### Viewing
-
-- **Phone (travelling):** open the site in the browser; HLS/H.264 play directly.
-- **Apple TV:** AirPlay from an iPhone/iPad/Mac Safari session (tvOS has no browser).
-  The receiver fetches the stream itself and cannot send the session cookie, so the
-  player mints a 12-hour **playback token** (scoped to that one title, read-only) and
-  appends it to the media URL. This is automatic — nothing to configure.
+- **Apple TV:** open the library in **iOS Safari**, start a title, then tap the
+  AirPlay button in the player controls and pick the Apple TV. tvOS has no browser,
+  so AirPlay is the route. The receiver fetches the stream from its own device, and
+  since nothing is gated it just works — nothing to configure.
+- **Phone / tablet:** open the site directly; HLS and H.264 play in the browser.
 - **LG TV (webOS) browser:** open the site; use the **H.264** transcode (HLS/HEVC are unreliable in that browser).
 
-Ports: 443 (via bharatsc nginx) for the web UI; `6881/tcp+udp` mapped directly for BitTorrent peers.
+Two macOS notes:
+
+- **The firewall blocks the binary until you allow it.** macOS prompts on first bind,
+  but a background launch (`run-local.sh` uses `nohup`) can miss the prompt — the
+  symptom is that `http://127.0.0.1:9000` works while the LAN address times out, even
+  though `lsof -nP -iTCP:9000` shows it listening on `*:9000`. Allow it explicitly:
+
+  ```bash
+  BIN="$PWD/target/release/moviehouse"
+  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$BIN"
+  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$BIN"
+  ```
+
+  The rule is per-binary. `build.rs` rewrites the binary on every build, so macOS may
+  re-prompt (or re-block) after a rebuild — re-run the two commands if the LAN stops
+  answering.
+- The Mac must stay awake while serving. `moviehouse serve` holds a `caffeinate`
+  assertion for its lifetime to prevent idle sleep; pass `--allow-sleep` to opt out.
+
+BitTorrent peers use `6881/tcp+udp`; forward that port on your router only if you
+want inbound peer connections.
 
 ## CLI Commands
 
@@ -135,23 +155,21 @@ See `.env.example` for the full annotated list. The essentials:
 ```
 TMDB_API_KEY=your_api_key_here              # movie/show metadata (optional but recommended)
 TMDB_READ_ACCESS_TOKEN=your_token_here      # TMDB v4 read token (optional)
-MOVIEHOUSE_ACCESS_CODE=change_me            # REQUIRED — single auth gate, min 16 chars (openssl rand -hex 24)
 MOVIEHOUSE_MAX_DOWNLOADS=2                  # max concurrent downloads
 ```
 
-Deployment-only keys (`DOMAIN`, `WEB_PORT`, `BT_PORT`, `DATA_DIR`, `MEDIA_DIR`,
-`MOVIEHOUSE_DOWNLOAD_DIR`, `MOVIEHOUSE_TRANSCODE_DIR`, `BHARATSC_DIR`) are also in
-`.env.example`. Values from the process environment take precedence over the file.
+Values from the process environment take precedence over the file.
 
 ### Data locations
 
-Outside Docker, everything lives under `$HOME` (override the media dirs with the
-`MOVIEHOUSE_*_DIR` env vars):
+Everything lives under `$HOME` by default. The three `MOVIEHOUSE_*_DIR` overrides
+below are read from the **process environment only** — the app does not parse them
+out of `.env`, so export them at launch if you keep media on an external drive:
 
 ```
-~/.movies/data/         — sled database (downloads, library, settings)
-~/.movies/downloads/    — downloaded media files
-~/.movies/transcoded/   — transcoded media files
+~/.movies/data/         — sled database (downloads, library, settings)   [MOVIEHOUSE_DATA_DIR]
+~/.movies/downloads/    — downloaded media files                        [MOVIEHOUSE_DOWNLOAD_DIR]
+~/.movies/transcoded/   — transcoded media files                        [MOVIEHOUSE_TRANSCODE_DIR]
 ~/.moviehouse/          — DHT routing table cache (dht_nodes.json)
 ```
 
@@ -168,7 +186,7 @@ moviehouse serve
 
 See [`docs/diagrams/`](docs/diagrams/) for per-workflow sequence diagrams (download,
 magnet metadata exchange, peer/piece exchange, DHT discovery, transcoding, library +
-TMDB, authentication, streaming & progress).
+TMDB, streaming & progress).
 
 ## Protocol Support
 
@@ -186,8 +204,8 @@ TMDB, authentication, streaming & progress).
 ## Tests
 
 ```bash
-cargo test                 # unit + auth tests
-./scripts/pre-deploy.sh    # Rust fmt/clippy + React prettier/eslint
+cargo test              # unit + router tests
+./scripts/check.sh      # Rust fmt/clippy + React prettier/eslint
 ```
 
 ## License

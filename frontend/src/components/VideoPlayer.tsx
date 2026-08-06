@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { X, Upload, Subtitles } from "lucide-react";
-import { fetchPlaybackToken } from "@/lib/api";
 
 interface SubtitleInfo {
   index: number;
@@ -30,34 +29,10 @@ export function VideoPlayer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [subtitles, setSubtitles] = useState<SubtitleInfo[]>([]);
   const [uploading, setUploading] = useState(false);
-  // Playback token, resolved before the <video> mounts. `undefined` = still
-  // fetching, `null` = unavailable (fall back to cookie-only URLs). We hold the
-  // element back rather than swapping `src` afterwards, because changing src on
-  // a playing element restarts the load and drops any active AirPlay route.
-  const [playbackToken, setPlaybackToken] = useState<string | null | undefined>(
-    undefined,
-  );
   // True once the media itself is found to carry subtitle tracks (see the
   // detection effect below) — the sidecar <track> elements are dropped so the
   // player's menu doesn't list every language twice.
   const [hasInBandSubs, setHasInBandSubs] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchPlaybackToken(mediaId)
-      .then((token) => {
-        if (!cancelled) setPlaybackToken(token);
-      })
-      .catch(() => {
-        if (!cancelled) setPlaybackToken(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [mediaId]);
-
-  // Appended to every URL an AirPlay receiver may fetch on its own.
-  const tokenQuery = playbackToken ? `?token=${playbackToken}` : "";
 
   const fetchSubtitles = useCallback(() => {
     fetch(`/api/v1/media/${mediaId}/subtitles`)
@@ -136,10 +111,9 @@ export function VideoPlayer({
       video.removeEventListener("loadedmetadata", detect);
       video.textTracks.removeEventListener("addtrack", detect);
     };
-  }, [playbackToken]);
+  }, [mediaId]);
 
-  // Set up progress tracking and resume. Re-runs once the token resolves, since
-  // that is when the <video> element actually mounts.
+  // Set up progress tracking and resume.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -176,7 +150,7 @@ export function VideoPlayer({
         sendProgress(video.currentTime, video.duration);
       }
     };
-  }, [startPosition, sendProgress, playbackToken]);
+  }, [startPosition, sendProgress]);
 
   return (
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal overlay dismiss
@@ -225,33 +199,27 @@ export function VideoPlayer({
             </Button>
           </div>
         </div>
-        {playbackToken === undefined ? (
-          <div className="w-full aspect-video rounded-lg bg-black/60 flex items-center justify-center text-sm text-white/60">
-            Loading...
-          </div>
-        ) : (
-          /* eslint-disable-next-line jsx-a11y/media-has-caption -- captions provided dynamically via subtitle tracks */
-          <video
-            ref={videoRef}
-            controls
-            autoPlay
-            src={`/api/v1/media/${mediaId}/stream${tokenQuery}`}
-            className="w-full max-h-[80vh] rounded-lg"
-            crossOrigin="anonymous"
-          >
-            {!hasInBandSubs &&
-              subtitles.map((sub, i) => (
-                <track
-                  key={sub.index}
-                  kind="subtitles"
-                  src={`/api/v1/media/${mediaId}/subtitles/${sub.index}${tokenQuery}`}
-                  label={sub.label}
-                  srcLang={sub.language ?? undefined}
-                  default={i === 0}
-                />
-              ))}
-          </video>
-        )}
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption -- captions provided dynamically via subtitle tracks */}
+        <video
+          ref={videoRef}
+          controls
+          autoPlay
+          src={`/api/v1/media/${mediaId}/stream`}
+          className="w-full max-h-[80vh] rounded-lg"
+          crossOrigin="anonymous"
+        >
+          {!hasInBandSubs &&
+            subtitles.map((sub, i) => (
+              <track
+                key={sub.index}
+                kind="subtitles"
+                src={`/api/v1/media/${mediaId}/subtitles/${sub.index}`}
+                label={sub.label}
+                srcLang={sub.language ?? undefined}
+                default={i === 0}
+              />
+            ))}
+        </video>
       </div>
     </div>
   );

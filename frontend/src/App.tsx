@@ -11,9 +11,7 @@ import { Sidebar } from "./components/Sidebar";
 import { BottomNav } from "./components/BottomNav";
 import { FfmpegBanner } from "./components/FfmpegBanner";
 import { Logo } from "./components/Logo";
-import { Login } from "./components/Login";
 import { SettingsProvider } from "./contexts/SettingsContext";
-import { apiFetch, checkAuth } from "./lib/api";
 import type { MediaEntry } from "./types";
 
 type View = "library" | "downloads" | "settings";
@@ -46,7 +44,7 @@ function AppInner() {
 
   useEffect(() => {
     const fetchLibrary = () => {
-      apiFetch("/api/v1/library")
+      fetch("/api/v1/library")
         .then((r) => r.json())
         .then((data: unknown) => {
           if (Array.isArray(data)) setLibrary(data);
@@ -118,16 +116,5 @@ function AppInner() {
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    checkAuth().then(setAuthed);
-    const onUnauth = () => setAuthed(false);
-    window.addEventListener("mh-unauthorized", onUnauth);
-    return () => window.removeEventListener("mh-unauthorized", onUnauth);
-  }, []);
-
-  if (authed === null) return null; // brief auth check
-  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
   return <AppInner />;
 }

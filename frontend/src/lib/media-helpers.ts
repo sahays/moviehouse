@@ -44,14 +44,35 @@ export function isActivelyTranscoding(state: TranscodeState): boolean {
   return typeof state === "object" && "Transcoding" in state;
 }
 
+/** Fraction of the runtime past which a title counts as watched rather than in progress. */
+const WATCHED_RATIO = 0.9;
+
+function playedFraction(entry: MediaEntry): number | null {
+  if (
+    entry.play_position == null ||
+    entry.duration == null ||
+    entry.duration <= 0
+  )
+    return null;
+  return entry.play_position / entry.duration;
+}
+
+/** Started but not finished — the "Continue Watching" rail. */
 export function hasProgress(entry: MediaEntry): boolean {
+  const played = playedFraction(entry);
   return (
+    played != null &&
     entry.play_position != null &&
     entry.play_position > 30 &&
-    entry.duration != null &&
-    entry.duration > 0 &&
-    entry.play_position / entry.duration < 0.9
+    played < WATCHED_RATIO
   );
+}
+
+/** Played to the end — the "Already Watched" rail. The exact complement of
+ * {@link hasProgress}, so a title sits in one rail or neither, never both. */
+export function isWatched(entry: MediaEntry): boolean {
+  const played = playedFraction(entry);
+  return played != null && played >= WATCHED_RATIO;
 }
 
 export function progressPercent(entry: MediaEntry): number {

@@ -14,8 +14,10 @@ import { MediaCard } from "./MediaCard";
 import { ShowCard } from "./ShowCard";
 import { VideoPlayer } from "./VideoPlayer";
 import { formatBytes, formatPlaybackTime } from "@/lib/formatters";
-import { hasProgress, progressPercent } from "@/lib/media-helpers";
+import { hasProgress, isWatched, progressPercent } from "@/lib/media-helpers";
 import { useLibraryGroups } from "@/hooks/useLibraryGroups";
+import { WatchedRail } from "./media/WatchedRail";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface LibraryViewProps {
   library: MediaEntry[];
@@ -50,11 +52,16 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
 
   const { shows, movies } = useLibraryGroups(library);
 
+  const byMostRecentlyPlayed = (a: MediaEntry, b: MediaEntry) =>
+    (b.last_played_at ?? 0) - (a.last_played_at ?? 0);
+
   const continueWatching = useMemo(
-    () =>
-      library
-        .filter((e) => hasProgress(e))
-        .sort((a, b) => (b.last_played_at ?? 0) - (a.last_played_at ?? 0)),
+    () => library.filter(hasProgress).sort(byMostRecentlyPlayed),
+    [library],
+  );
+
+  const watched = useMemo(
+    () => library.filter(isWatched).sort(byMostRecentlyPlayed),
     [library],
   );
 
@@ -94,6 +101,21 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
 
   const handleDelete = async (id: string) => {
     await fetch(`/api/v1/library/${id}`, { method: "DELETE" });
+    onRefresh();
+  };
+
+  // Retire a finished title: delete its files, then drop the entry. Confirmed
+  // first because, unlike the record-only "Remove", this cannot be undone by a
+  // rescan — the files are gone.
+  const [cleanupTarget, setCleanupTarget] = useState<MediaEntry | null>(null);
+
+  const handleCleanup = async () => {
+    const entry = cleanupTarget;
+    setCleanupTarget(null);
+    if (!entry) return;
+    await fetch(`/api/v1/library/${entry.id}?delete_files=true`, {
+      method: "DELETE",
+    }).catch(() => {});
     onRefresh();
   };
 
@@ -299,6 +321,12 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
         </div>
       )}
 
+      <WatchedRail
+        entries={watched}
+        onPlay={setPlaying}
+        onCleanup={setCleanupTarget}
+      />
+
       {shows.length > 0 && (
         <div className="mb-6">
           <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3 flex items-center gap-2">
@@ -347,6 +375,22 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
           onClose={() => setPlaying(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={cleanupTarget != null}
+        destructive
+        title="Clean up files?"
+        message={
+          cleanupTarget
+            ? `Permanently delete the ${formatBytes(cleanupTarget.file_size)} of files for "${
+                cleanupTarget.episode_title ?? cleanupTarget.title
+              }" — the source, every transcoded version, and its subtitles — and remove it from the library. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete files"
+        onConfirm={handleCleanup}
+        onCancel={() => setCleanupTarget(null)}
+      />
     </>
   );
 }

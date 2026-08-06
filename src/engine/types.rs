@@ -149,6 +149,12 @@ pub fn default_transcode_dir() -> PathBuf {
     dir_from_env("MOVIEHOUSE_TRANSCODE_DIR").unwrap_or_else(|| home_movies_subdir("transcoded"))
 }
 
+/// Where the sled database lives. Unlike the media dirs this is never stored in
+/// settings — settings live *inside* it — so the env var is the only override.
+pub fn default_data_dir() -> PathBuf {
+    dir_from_env("MOVIEHOUSE_DATA_DIR").unwrap_or_else(|| home_movies_subdir("data"))
+}
+
 /// `$HOME/.movies/<name>` — the fallback when no env override is set. `$HOME` is
 /// writable by definition (the container sets it to the mounted data volume).
 /// Public so startup repair can recognise a stored value that is still this

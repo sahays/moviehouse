@@ -12,22 +12,6 @@ LOG_FILE="/tmp/moviehouse.log"
 BIND="${1:-0.0.0.0:9000}"
 PORT="${BIND##*:}"
 
-# ── Fail fast: the server refuses to start without an access code ──
-# (checked here so you get a clear message instead of a startup timeout).
-have_code=false
-if [ -n "${MOVIEHOUSE_ACCESS_CODE:-}" ]; then
-    have_code=true
-elif [ -f .env ] && grep -qE '^MOVIEHOUSE_ACCESS_CODE=.+' .env \
-    && ! grep -qE '^MOVIEHOUSE_ACCESS_CODE=change_me$' .env; then
-    have_code=true
-fi
-if [ "$have_code" = false ]; then
-    echo "ERROR: MOVIEHOUSE_ACCESS_CODE is not set — the web UI won't start without it."
-    echo "Add one to .env:"
-    echo '  echo "MOVIEHOUSE_ACCESS_CODE=$(openssl rand -hex 24)" >> .env'
-    exit 1
-fi
-
 echo "Building moviehouse..."
 cargo build --release
 
@@ -62,9 +46,10 @@ echo "PID: $(cat "$PID_FILE")"
 # Determine check URL (0.0.0.0 isn't reachable, use 127.0.0.1)
 CHECK_URL="http://127.0.0.1:${PORT}"
 
-# Wait for server to be ready
+# Wait for server to be ready. /health is public and cheap — the SPA route works
+# too but drags the whole embedded bundle through on every poll.
 for _ in $(seq 1 30); do
-    if curl -s "$CHECK_URL" > /dev/null 2>&1; then
+    if curl -sf "${CHECK_URL}/health" > /dev/null 2>&1; then
         echo "Web UI ready at http://$BIND"
         HOSTNAME=$(hostname -s 2>/dev/null || echo "localhost")
         echo "Network access: http://${HOSTNAME}.local:${PORT}"
