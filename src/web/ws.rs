@@ -33,11 +33,15 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     loop {
         match rx.recv().await {
             Ok(event) => {
-                let msg = serde_json::json!({
-                    "type": "update",
-                    "id": event.id,
-                    "status": event.status,
-                });
+                let msg = if event.removed {
+                    serde_json::json!({ "type": "remove", "id": event.id })
+                } else {
+                    serde_json::json!({
+                        "type": "update",
+                        "id": event.id,
+                        "status": event.status,
+                    })
+                };
                 if socket
                     .send(Message::Text(msg.to_string().into()))
                     .await

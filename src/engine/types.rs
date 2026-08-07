@@ -240,6 +240,33 @@ pub struct SessionHandle {
 pub struct SessionEvent {
     pub id: Uuid,
     pub status: SessionStatus,
+    /// The download was removed, not updated. The websocket turns this into a
+    /// `remove` message so the UI drops the row; without it a deleted download
+    /// lingers in the list until the page is reloaded.
+    pub removed: bool,
+}
+
+impl SessionEvent {
+    /// A progress/state update for a live download.
+    #[must_use]
+    pub fn update(id: Uuid, status: SessionStatus) -> Self {
+        Self {
+            id,
+            status,
+            removed: false,
+        }
+    }
+
+    /// The download is gone. `status` is its last known state, for subscribers
+    /// that want it; the UI only needs the id.
+    #[must_use]
+    pub fn removed(id: Uuid, status: SessionStatus) -> Self {
+        Self {
+            id,
+            status,
+            removed: true,
+        }
+    }
 }
 
 pub struct DownloadOptions {

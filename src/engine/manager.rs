@@ -173,10 +173,7 @@ impl SessionManager {
             let mut last_persist = std::time::Instant::now();
             while status_rx.changed().await.is_ok() {
                 let status = status_rx.borrow().clone();
-                let _ = event_tx.send(SessionEvent {
-                    id,
-                    status: status.clone(),
-                });
+                let _ = event_tx.send(SessionEvent::update(id, status.clone()));
 
                 // Persist status every 5 seconds or on completion
                 let should_persist = last_persist.elapsed().as_secs() >= 5
@@ -208,10 +205,7 @@ impl SessionManager {
             // Update final status
             if let Some(handle) = sessions.get(&id) {
                 let final_status = handle.status.read().unwrap().clone();
-                let _ = event_tx.send(SessionEvent {
-                    id,
-                    status: final_status.clone(),
-                });
+                let _ = event_tx.send(SessionEvent::update(id, final_status.clone()));
                 // Persist final state
                 if let Ok(Some(mut record)) = store.get_download(&id) {
                     record.status = final_status.clone();
@@ -486,11 +480,19 @@ impl SessionManager {
     }
 
     pub fn remove(&self, id: &Uuid) {
+        // Capture the last status before the record goes, so subscribers get a
+        // complete event.
+        let last = self.get(id);
         if let Some((_, handle)) = self.sessions.remove(id) {
             handle.cancel.cancel();
         }
         if let Err(e) = self.store.remove_download(id) {
             tracing::error!(error = %e, "Failed to remove download from store");
+        }
+        // Tell the UI to drop the row. Without this a deleted download stays on
+        // screen until the page is reloaded.
+        if let Some(status) = last {
+            let _ = self.event_tx.send(SessionEvent::removed(*id, status));
         }
     }
 
@@ -540,10 +542,7 @@ impl SessionManager {
         let _ = self.store.put_download(&record);
 
         // Broadcast to WebSocket
-        let _ = self.event_tx.send(SessionEvent {
-            id,
-            status: status.clone(),
-        });
+        let _ = self.event_tx.send(SessionEvent::update(id, status.clone()));
 
         self.sessions.insert(id, handle);
         id
@@ -572,10 +571,9 @@ impl SessionManager {
         if let Some(handle) = self.sessions.get(id) {
             let mut status = handle.status.write().unwrap();
             status.state = SessionState::Error(error);
-            let _ = self.event_tx.send(SessionEvent {
-                id: *id,
-                status: status.clone(),
-            });
+            let _ = self
+                .event_tx
+                .send(SessionEvent::update(*id, status.clone()));
             // Persist the error state
             if let Ok(Some(mut record)) = self.store.get_download(id) {
                 record.status = status.clone();

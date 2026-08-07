@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { X, ChevronDown, ChevronUp, Download } from "lucide-react";
+import { X, ChevronDown, ChevronUp, Download, Eraser } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SessionStatus } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -262,6 +262,29 @@ export function DownloadList({ torrents }: DownloadListProps) {
     }
   }, []);
 
+  const [clearing, setClearing] = useState(false);
+
+  // Whether an entry's files are still on disk is only knowable server-side, so
+  // the button is offered whenever anything is finished-or-failed and the server
+  // decides what actually goes. Records only — files are never touched.
+  const clearable = useMemo(
+    () =>
+      Array.from(torrents.values()).filter(
+        (t) => typeof t.state !== "string" || t.state !== "Downloading",
+      ).length,
+    [torrents],
+  );
+
+  const handleClearStale = useCallback(async () => {
+    setClearing(true);
+    try {
+      await fetch("/api/v1/torrents/cleanup", { method: "POST" });
+    } catch {
+      // The websocket drops the rows; a failure just leaves them in place.
+    }
+    setClearing(false);
+  }, []);
+
   const sorted = useMemo(
     () =>
       Array.from(torrents.values()).sort((a, b) => {
@@ -294,6 +317,24 @@ export function DownloadList({ torrents }: DownloadListProps) {
 
   return (
     <div className="flex flex-col gap-3">
+      {clearable > 0 && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-[var(--color-text-tertiary)]">
+            Clear entries that failed, were cancelled, or whose files are gone.
+            Files are never deleted.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleClearStale()}
+            disabled={clearing}
+            className="shrink-0"
+          >
+            <Eraser size={14} />
+            {clearing ? "Clearing..." : "Clear stale"}
+          </Button>
+        </div>
+      )}
       {sorted.map((t) => (
         <DownloadCard
           key={t.id}

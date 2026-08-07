@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::ApiError;
 use crate::engine::manager::DownloadOptions;
+use crate::engine::session::SessionState;
 use crate::torrent::magnet::MagnetLink;
 use crate::torrent::metainfo::Metainfo;
 use crate::web::server::AppState;
@@ -76,6 +77,37 @@ pub async fn delete_torrent(
     }
     state.manager.remove(&id);
     StatusCode::NO_CONTENT
+}
+
+/// True when a download record no longer refers to anything real: it errored
+/// out, was cancelled, or finished but its payload is no longer on disk.
+///
+/// Deliberately conservative about "missing files" — only a *finished* download
+/// is judged that way. An in-flight one legitimately has nothing on disk yet.
+fn is_stale(record: &crate::engine::store::DownloadRecord) -> bool {
+    match record.status.state {
+        SessionState::Error(_) | SessionState::Cancelled => true,
+        SessionState::Completed => !record.output_dir.join(&record.name).exists(),
+        SessionState::Downloading | SessionState::Resolving => false,
+    }
+}
+
+/// Drop download records that point at nothing: errored, cancelled, or finished
+/// with their files gone.
+///
+/// **Records only — never deletes files.** Two records can name the same folder
+/// (a failed attempt plus the retry that succeeded), so removing files here
+/// would let clearing a dead entry destroy a live one's data.
+pub async fn cleanup_downloads(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let records = state.store.list_downloads().unwrap_or_default();
+    let mut removed = 0u32;
+    for record in records.iter().filter(|r| is_stale(r)) {
+        state.manager.remove(&record.id);
+        removed += 1;
+        tracing::info!(id = %record.id, name = %record.name, "cleared stale download record");
+    }
+    let _ = state.store.flush();
+    Json(serde_json::json!({ "removed": removed }))
 }
 
 #[allow(clippy::too_many_lines)]

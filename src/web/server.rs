@@ -44,6 +44,10 @@ pub fn create_router(state: &Arc<AppState>) -> Router {
             axum::routing::get(torrents::list_torrents).post(torrents::add_torrent),
         )
         .route(
+            "/api/v1/torrents/cleanup",
+            axum::routing::post(torrents::cleanup_downloads),
+        )
+        .route(
             "/api/v1/torrents/{id}",
             axum::routing::get(torrents::get_torrent).delete(torrents::delete_torrent),
         )
