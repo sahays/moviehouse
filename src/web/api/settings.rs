@@ -20,6 +20,7 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoRespon
         "default_preset": settings.default_preset,
         "transcode_concurrency": settings.transcode_concurrency,
         "transcode_dir": settings.transcode_dir,
+        "delete_source_after_transcode": settings.delete_source_after_transcode,
     }))
 }
 
@@ -35,7 +36,7 @@ pub async fn put_settings(
         ("transcode_dir", &settings.transcode_dir),
     ];
     for (label, dir) in dirs {
-        if let Err(msg) = super::paths::validate_config_dir(dir) {
+        if let Err(msg) = crate::paths::validate_config_dir(dir) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiError {
@@ -46,7 +47,7 @@ pub async fn put_settings(
         }
     }
     if let Some(scan_dir) = settings.media_scan_dir.as_deref()
-        && let Err(msg) = super::paths::validate_config_dir(scan_dir)
+        && let Err(msg) = crate::paths::validate_config_dir(scan_dir)
     {
         return (
             StatusCode::BAD_REQUEST,
@@ -90,7 +91,7 @@ pub async fn migrate_media(
     let base = std::path::PathBuf::from(&req.path);
     // Confine the migration target: a request body must not be able to create
     // directories / move files into arbitrary system locations.
-    if let Err(msg) = super::paths::confine(&base) {
+    if let Err(msg) = crate::paths::confine(&base) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": format!("invalid path: {msg}") })),

@@ -6,6 +6,7 @@ mod dht;
 mod disk;
 mod engine;
 mod error;
+mod paths;
 mod peer;
 mod piece;
 mod tmdb;
@@ -119,7 +120,7 @@ async fn cmd_magnet(magnet: MagnetLink, cli: &Cli, no_dht: bool) -> anyhow::Resu
     let our_peer_id = PeerId::generate();
 
     // Phase 1: Download metadata from peers
-    let (metainfo, warm_peers) = engine::magnet::download_metadata(
+    let (metainfo, _torrent_bytes, warm_peers) = engine::magnet::download_metadata(
         &magnet,
         our_peer_id,
         cli.port,
@@ -200,6 +201,15 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
         store.clone(),
         Some(transcode_handle.clone()),
     ));
+    // Restart downloads a previous shutdown interrupted. Each session rebuilds
+    // its progress by hashing what is already on disk, so this costs I/O but no
+    // re-download. Before this existed, every restart silently discarded an
+    // in-flight torrent's bytes.
+    let resumed = manager.resume_all();
+    if resumed > 0 {
+        eprintln!("Resuming {resumed} unfinished download(s) — verifying existing data");
+    }
+
     let state = Arc::new(web::server::AppState {
         manager,
         store,
@@ -235,6 +245,13 @@ async fn cmd_serve(bind: &str, open: bool, allow_sleep: bool) -> anyhow::Result<
     transcode_for_shutdown.cancel_all();
     // Give ffmpeg processes a moment to die
     tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Flush sled before exiting. Without this, writes still in the log buffer are
+    // rolled back on the next open ("removing N blobs that have a higher lsn than
+    // our stable log"), silently reverting recent library and settings changes.
+    if let Err(e) = state.store.flush() {
+        tracing::error!(error = %e, "failed to flush store on shutdown");
+    }
 
     Ok(())
 }

@@ -29,7 +29,7 @@ pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoRes
         )
             .into_response();
     };
-    if !super::paths::is_under_allowed_root(&canonical) {
+    if !crate::paths::is_under_allowed_root(&canonical) {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiError {
@@ -52,7 +52,7 @@ pub async fn browse_filesystem(Query(query): Query<BrowseQuery>) -> impl IntoRes
     // Only offer parent navigation if parent is within allowed paths
     let parent = path.parent().and_then(|p| {
         let canon = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        if super::paths::is_under_allowed_root(&canon) {
+        if crate::paths::is_under_allowed_root(&canon) {
             Some(p.to_string_lossy().to_string())
         } else {
             None

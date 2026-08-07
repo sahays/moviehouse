@@ -88,6 +88,83 @@ impl SessionManager {
             tracing::error!(error = %e, "Failed to persist download");
         }
 
+        self.spawn_session(session, handle)
+    }
+
+    /// Restart a persisted download that a shutdown interrupted.
+    ///
+    /// Reuses the record's own `id` so the UI, the stored record, and any library
+    /// entry keep referring to the same download. Progress is not carried in the
+    /// record — the session rebuilds it by hashing the files on disk (see
+    /// [`crate::engine::resume`]), so this costs disk I/O but no re-download.
+    ///
+    /// Returns `None` when the stored metainfo cannot be parsed, which is the one
+    /// case that leaves nothing to resume.
+    pub fn resume(&self, record: &DownloadRecord) -> Option<Uuid> {
+        let Ok(metainfo) = Metainfo::from_bytes(&record.metainfo_bytes) else {
+            // Leaving the record as `Downloading` would show a live-looking entry
+            // in the UI with no session behind it — the exact shape of a download
+            // that silently does nothing forever. Say so instead.
+            tracing::warn!(
+                id = %record.id, name = %record.name,
+                bytes = record.metainfo_bytes.len(),
+                "cannot resume: stored metainfo is missing or unreadable — re-add the torrent"
+            );
+            let mut record = record.clone();
+            record.status.state =
+                SessionState::Error("stored torrent metadata lost — re-add this torrent".into());
+            let _ = self.store.put_download(&record);
+            return None;
+        };
+        let session = TorrentSession::new(
+            metainfo,
+            PeerId::generate(),
+            DownloadOptions::DEFAULT_PEER_PORT,
+            DownloadOptions::DEFAULT_MAX_PEERS,
+            record.output_dir.clone(),
+            false,
+            record.lightspeed,
+            self.cancel.child_token(),
+            Vec::new(),
+        )
+        .with_id(record.id);
+        let handle = session.handle();
+        Some(self.spawn_session(session, handle))
+    }
+
+    /// Resume every unfinished download in the store. Called once at startup.
+    /// Returns how many sessions were restarted.
+    pub fn resume_all(&self) -> usize {
+        let Ok(records) = self.store.list_downloads() else {
+            return 0;
+        };
+        let mut resumed = 0;
+        for record in records {
+            if matches!(
+                record.status.state,
+                SessionState::Completed | SessionState::Cancelled
+            ) {
+                continue;
+            }
+            if self.resume(&record).is_some() {
+                tracing::info!(id = %record.id, name = %record.name, "resuming download");
+                resumed += 1;
+            }
+        }
+        resumed
+    }
+
+    /// Wire a session's status stream to the broadcast channel and the store,
+    /// register it, and run it.
+    ///
+    /// Shared by [`Self::add_torrent`] and [`Self::resume`] so a resumed download
+    /// gets identical persistence and library-import-on-completion behaviour — a
+    /// second copy of this would silently drift.
+    // unwrap_used: RwLock unwrap is correct — poisoned lock means a thread panicked
+    #[allow(clippy::too_many_lines, clippy::unwrap_used)]
+    fn spawn_session(&self, session: TorrentSession, handle: SessionHandle) -> Uuid {
+        let id = handle.id;
+
         // Forward status updates to broadcast channel + persist periodically
         let event_tx = self.event_tx.clone();
         let store = self.store.clone();

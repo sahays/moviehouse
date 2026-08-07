@@ -45,7 +45,7 @@ export function MediaCardActions({
           onClick={() => onDelete(entryId)}
         >
           <Trash2 size={14} />
-          Remove
+          Delete
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -99,15 +99,15 @@ export function LibraryView({ library, onRefresh }: LibraryViewProps) {
     if (library.length > 0) checkHealth();
   }, [library.length, checkHealth]);
 
-  const handleDelete = async (id: string) => {
-    await fetch(`/api/v1/library/${id}`, { method: "DELETE" });
-    onRefresh();
-  };
-
-  // Retire a finished title: delete its files, then drop the entry. Confirmed
-  // first because, unlike the record-only "Remove", this cannot be undone by a
-  // rescan — the files are gone.
+  // Deleting always removes the files. A record-only delete looked harmless but
+  // silently orphaned multi-GB files that nothing in the app could see or clean
+  // up afterwards, so both entry points route through the same confirmed flow.
   const [cleanupTarget, setCleanupTarget] = useState<MediaEntry | null>(null);
+
+  const handleDelete = (id: string) => {
+    const entry = library.find((e) => e.id === id);
+    if (entry) setCleanupTarget(entry);
+  };
 
   const handleCleanup = async () => {
     const entry = cleanupTarget;

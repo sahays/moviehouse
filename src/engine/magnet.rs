@@ -40,7 +40,7 @@ pub async fn download_metadata(
     no_dht: bool,
     lightspeed: bool,
     cancel: CancellationToken,
-) -> anyhow::Result<(Metainfo, Vec<SocketAddr>)> {
+) -> anyhow::Result<(Metainfo, Vec<u8>, Vec<SocketAddr>)> {
     let info_hash = magnet.info_hash;
     let name = magnet.display_name.as_deref().unwrap_or("unknown");
     eprintln!("Magnet: {info_hash} ({name})");
@@ -192,8 +192,12 @@ pub async fn download_metadata(
 
     let metainfo = Metainfo::from_info_bytes(&raw_info, info_hash, magnet.trackers.clone())
         .map_err(|e| anyhow::anyhow!("failed to parse metadata: {e}"))?;
+    // Persistable form of the metadata we just fetched, so this download can be
+    // resumed after a restart instead of starting over.
+    let torrent_bytes = Metainfo::torrent_bytes_from_info(&raw_info, &magnet.trackers)
+        .map_err(|e| anyhow::anyhow!("failed to re-encode metadata: {e}"))?;
 
-    Ok((metainfo, warm_peers))
+    Ok((metainfo, torrent_bytes, warm_peers))
 }
 
 fn request_metadata_pieces(

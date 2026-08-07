@@ -94,6 +94,7 @@ export interface AppSettings {
   download_dir: string;
   media_scan_dir: string | null;
   auto_transcode: boolean;
+  delete_source_after_transcode: boolean;
   default_preset: string;
   transcode_concurrency: number;
   transcode_dir: string;

@@ -164,6 +164,39 @@ impl Metainfo {
         self.info.pieces.len()
     }
 
+    /// Wrap a raw bencoded info dict into a complete `.torrent` byte blob.
+    ///
+    /// A magnet download only ever receives the info dict (BEP 9). Persisting
+    /// that alone is useless — [`Metainfo::from_bytes`] expects a full metainfo
+    /// dict — so magnet downloads stored a 2-byte placeholder and could never be
+    /// resumed after a restart. This produces bytes that round-trip.
+    pub fn torrent_bytes_from_info(
+        raw_info: &[u8],
+        trackers: &[String],
+    ) -> Result<Vec<u8>, MetainfoError> {
+        let info_val = bencode::decode(raw_info)?;
+        let mut dict = std::collections::BTreeMap::new();
+        dict.insert(b"info".to_vec(), info_val);
+        if let Some(first) = trackers.first() {
+            dict.insert(
+                b"announce".to_vec(),
+                BValue::Bytes(first.clone().into_bytes()),
+            );
+        }
+        if trackers.len() > 1 {
+            dict.insert(
+                b"announce-list".to_vec(),
+                BValue::List(vec![BValue::List(
+                    trackers
+                        .iter()
+                        .map(|t| BValue::Bytes(t.clone().into_bytes()))
+                        .collect(),
+                )]),
+            );
+        }
+        Ok(bencode::encode::encode(&BValue::Dict(dict)))
+    }
+
     /// Construct from raw info dictionary bytes (for magnet link metadata download).
     /// `raw_info` is the bencoded info dict. `info_hash` was already verified by caller.
     pub fn from_info_bytes(
@@ -399,6 +432,58 @@ mod tests {
         let mut root = BTreeMap::new();
         root.insert(b"info".to_vec(), BValue::Dict(info));
         encode(&BValue::Dict(root))
+    }
+
+    /// The bare info dict a magnet download receives over BEP 9.
+    /// The `pieces` hashes must cover `length`, or the consistency check (M6)
+    /// rejects the torrent.
+    fn make_info_dict(name: &str, piece_length: i64, length: i64) -> Vec<u8> {
+        let num_pieces = (length as usize).div_ceil(piece_length as usize);
+        let mut info = BTreeMap::new();
+        info.insert(b"name".to_vec(), BValue::Bytes(name.as_bytes().to_vec()));
+        info.insert(b"piece length".to_vec(), BValue::Int(piece_length));
+        info.insert(
+            b"pieces".to_vec(),
+            BValue::Bytes(vec![7u8; 20 * num_pieces]),
+        );
+        info.insert(b"length".to_vec(), BValue::Int(length));
+        encode(&BValue::Dict(info))
+    }
+
+    #[test]
+    fn magnet_metadata_round_trips_into_a_resumable_torrent() {
+        // A magnet only ever receives the info dict. Persisting it must produce
+        // bytes `from_bytes` can parse, or the download cannot be resumed after a
+        // restart — which is exactly what used to happen.
+        let raw_info = make_info_dict("movie.mkv", 16384, 65536);
+        let trackers = vec![
+            "udp://a.example:6969".to_string(),
+            "udp://b.example:80".into(),
+        ];
+
+        let bytes = Metainfo::torrent_bytes_from_info(&raw_info, &trackers).unwrap();
+        let parsed = Metainfo::from_bytes(&bytes).unwrap();
+
+        assert_eq!(parsed.info.name, "movie.mkv");
+        assert_eq!(parsed.info.piece_length, 16384);
+        assert_eq!(parsed.info.total_length, 65536);
+        assert_eq!(parsed.info.pieces.len(), 4);
+        assert_eq!(parsed.announce.as_deref(), Some("udp://a.example:6969"));
+
+        // The info hash must survive the wrap, or peers reject our handshake.
+        // Compared against SHA-1 of the original info dict — deriving the
+        // expectation from `parsed` would assert nothing.
+        let expected: [u8; 20] = Sha1::digest(&raw_info).into();
+        assert_eq!(parsed.info_hash.0, expected);
+    }
+
+    #[test]
+    fn magnet_metadata_round_trips_without_trackers() {
+        let raw_info = make_info_dict("x.bin", 16384, 1024);
+        let bytes = Metainfo::torrent_bytes_from_info(&raw_info, &[]).unwrap();
+        let parsed = Metainfo::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.info.name, "x.bin");
+        assert!(parsed.announce.is_none());
     }
 
     /// Build minimal multi-file torrent bencode bytes.

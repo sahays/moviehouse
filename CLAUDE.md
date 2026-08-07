@@ -39,9 +39,10 @@ bencode/   → torrent/  → tracker/ + dht/  → peer/  → piece/  → disk/
 
 `engine/` ties the stack into running downloads:
 - `session.rs` — one `TorrentSession` per download: drives peer manager, piece picker, tracker/DHT, choker.
-- `manager.rs` — `SessionManager` owns all sessions in a `DashMap<Uuid, SessionHandle>`, broadcasts `SessionEvent`s. **No cap on concurrent downloads** — add as many as you like; nothing bounds sockets/FDs/disk growth.
+- `manager.rs` — `SessionManager` owns all sessions in a `DashMap<Uuid, SessionHandle>`, broadcasts `SessionEvent`s. `resume_all()` runs at startup and restarts unfinished downloads via the shared `spawn_session`. **No cap on concurrent downloads** — add as many as you like; nothing bounds sockets/FDs/disk growth.
 - `store.rs` — **sled** persistence (downloads, library, settings) via bincode/JSON.
 - `library.rs` — scanned/downloaded media grouped into movies vs. shows/seasons/episodes.
+- `resume.rs` — `verify_on_disk`: rebuilds a download's bitfield by hashing the files already present, so a restart continues instead of re-downloading. The **files are the source of truth**, not `DownloadRecord::completed_pieces` (which nothing writes). Anything that fails its SHA-1 is simply re-fetched, so it can only under-claim.
 - `cleanup.rs` — `owned_files(entry)`: which files a library entry owns (media file, transcoded versions, sidecar subtitles). Pure and tested; the unlink lives in `web/api/library.rs` next to the `paths::confine` guard. **Never includes `original_path`** — that is the shared source *directory*, so deleting it would take the rest of a season with it.
 
 `transcode/` — concurrent ffmpeg runner (`runner.rs`) processing jobs; two built-in presets (`presets.rs`): `hevc` (remux MKV→MP4, hvc1 tag, no re-encode) and `h264` (universal re-encode). Progress persists across restarts.
@@ -49,10 +50,12 @@ bencode/   → torrent/  → tracker/ + dht/  → peer/  → piece/  → disk/
 `web/` — the `serve` command's HTTP layer (axum 0.8):
 - `server.rs` — `AppState` (manager, store, transcode handle) + `create_router`. Also serves the embedded SPA (`FrontendAssets` from `frontend/dist`, SPA-fallback to `index.html`) — but an unmatched `/api/*` path returns a 404 JSON body rather than falling through to the SPA, so a stale client cannot read the index page as success.
 - `api/` — REST handlers under `/api/v1/*` (torrents, library, media, transcode, settings, filesystem). **No auth middleware — every route is open.**
-- **There is no authentication.** The access-code login, session cookies, and playback tokens were all removed: this binds to a home LAN and trusts everything that can reach it. Consequences to keep in mind when changing anything here: any device on the network can drive the torrent engine, browse the filesystem within `api/paths.rs`'s allowed roots, rewrite settings, and delete media via `DELETE /api/v1/library/{id}?delete_files=true`. `api/paths.rs` is therefore the *only* remaining trust boundary — treat it accordingly. Do not add a route that widens what an unauthenticated caller can reach on disk.
+- **There is no authentication.** The access-code login, session cookies, and playback tokens were all removed: this binds to a home LAN and trusts everything that can reach it. Consequences to keep in mind when changing anything here: any device on the network can drive the torrent engine, browse the filesystem within `paths.rs`'s allowed roots, rewrite settings, and delete media via `DELETE /api/v1/library/{id}?delete_files=true`. `paths.rs` is therefore the *only* remaining trust boundary — treat it accordingly. Do not add a route that widens what an unauthenticated caller can reach on disk.
 - `security_headers.rs` — **what nginx used to do.** The app once ran behind a reverse proxy that added a CSP and security headers; local-only serves axum straight to the LAN, so they live in-process now. No HSTS (plain HTTP on the LAN).
 - `ws.rs` — WebSocket at `/api/v1/ws` for live download progress.
-- `api/paths.rs` — **security-critical**: confines caller-supplied filesystem paths (download/scan/transcode roots, folder browser) to allowed roots (home + `/media`, `/mnt`, `/Volumes`, `/data`, `/srv`). Reject `..`, canonicalize before comparing. Route any new endpoint that takes a path through this.
+
+
+`paths.rs` (crate root) — **security-critical**: confines caller-supplied filesystem paths (download/scan/transcode roots, folder browser) to allowed roots (home + `/media`, `/mnt`, `/Volumes`, `/data`, `/srv`). Rejects `..`, canonicalizes before comparing. Route anything that takes a path — or deletes one — through this. It lives at the crate root rather than under `web/` because `engine/cleanup.rs` and the transcode runner delete files too.
 
 `tmdb.rs` — metadata client (posters, cast, per-episode synopses). `main.rs` wires everything in `cmd_serve`; the CLI (`cli.rs`) also exposes headless `download`/`magnet`/`info` subcommands that bypass the web layer.
 
@@ -63,11 +66,11 @@ Request flow: axum route → `api/*` handler → `SessionManager`/`Store`/`Trans
 Beyond the global rules (DRY, composition, layered altitude, ≤15–20-line functions, ≤300-line files, OWASP), this repo has established idioms — match them:
 
 - **`unwrap`/`expect`-free, fail-closed.** These lints are denied. Use `let ... else`, `?`, and safe defaults. When a "can't happen" branch is unavoidable, handle it explicitly and add a comment explaining why the fallback is safe (see `remove_owned_files` in `web/api/library.rs` skipping — never deleting — a path it cannot confine).
-- **Document the *why*, especially for security/crypto decisions.** Module tops carry `//!` doc comments stating purpose and threat model (`api/paths.rs`, `security_headers.rs`, `engine/cleanup.rs`); non-obvious tradeoffs (cast safety, `--locked` omission, why `original_path` is never deleted) get an inline rationale. Keep this up when you change the reasoning.
+- **Document the *why*, especially for security/crypto decisions.** Module tops carry `//!` doc comments stating purpose and threat model (`paths.rs`, `security_headers.rs`, `engine/cleanup.rs`); non-obvious tradeoffs (cast safety, `--locked` omission, why `original_path` is never deleted) get an inline rationale. Keep this up when you change the reasoning.
 - **Structured logging via `tracing`.** Identifiers are fields, not interpolated strings: `tracing::warn!(media_id = %entry.id, path = %path.display(), "refusing to delete ...")`. Pick the right level.
 - **Thin handlers, logic in `engine/`.** `api/*` handlers translate HTTP ↔ engine calls on `AppState`; they don't hold business logic.
-- **Validate at the trust boundary.** Any endpoint accepting a caller-supplied path goes through `api/paths.rs` (`confine`/`validate_config_dir`). With no auth layer left, that confinement is the last line of defence — see the "no authentication" note under Architecture.
-- **Module layout.** Each subsystem is a directory with a `mod.rs` that declares and re-exports its public surface; tests live in `#[cfg(test)]` modules in the same file (see `engine/cleanup.rs`, `web/api/paths.rs`).
+- **Validate at the trust boundary.** Any endpoint accepting a caller-supplied path goes through `paths.rs` (`confine`/`validate_config_dir`). With no auth layer left, that confinement is the last line of defence — see the "no authentication" note under Architecture.
+- **Module layout.** Each subsystem is a directory with a `mod.rs` that declares and re-exports its public surface; tests live in `#[cfg(test)]` modules in the same file (see `engine/cleanup.rs`, `paths.rs`).
 
 ## Frontend
 

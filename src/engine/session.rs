@@ -102,6 +102,21 @@ impl TorrentSession {
         }
     }
 
+    /// Adopt a persisted download's id.
+    ///
+    /// A resumed session must keep the identity the store record, the UI, and any
+    /// library entry already reference — a fresh `Uuid` would present the same
+    /// download as a second, unrelated one.
+    #[must_use]
+    pub fn with_id(mut self, id: Uuid) -> Self {
+        self.id = id;
+        if let Ok(mut status) = self.status.write() {
+            status.id = id;
+            let _ = self.status_tx.send(status.clone());
+        }
+        self
+    }
+
     pub fn handle(&self) -> SessionHandle {
         SessionHandle {
             id: self.id,
@@ -131,6 +146,9 @@ impl TorrentSession {
 
         // Subsystems
         let file_mapping = FileMapping::new(info, &self.output_dir);
+        // Checked before the mapping moves into the disk manager. Nothing on disk
+        // means a fresh download, and verifying 0 bytes is pure wasted I/O.
+        let has_existing_data = file_mapping.file_paths().iter().any(|p| p.exists());
         let (disk_handle, disk_manager) =
             create_disk_manager(file_mapping, self.cancel.clone(), self.lightspeed);
         let piece_store = PieceStore::new(info.pieces.clone());
@@ -156,6 +174,35 @@ impl TorrentSession {
         let disk_task: JoinHandle<()> = tokio::spawn(async move {
             disk_manager.run().await;
         });
+
+        // Adopt whatever is already on disk. A session starts with an empty
+        // bitfield, so without this every restart re-downloads the whole torrent
+        // from the network. Must run after the disk task is spawned — it reads
+        // through the same channel. See `engine::resume` for why the files, and
+        // not the persisted record, are the source of truth.
+        if has_existing_data {
+            eprintln!("Verifying existing data for: {}", info.name);
+            let adopted = crate::engine::resume::verify_on_disk(
+                &disk_handle,
+                &piece_store,
+                info,
+                &mut picker,
+            )
+            .await;
+            let bytes = (adopted as u64 * u64::from(info.piece_length)).min(info.total_length);
+            if let Ok(mut status) = self.status.write() {
+                status.downloaded_bytes = bytes;
+                status.pieces_done = adopted;
+                status.progress = bytes as f64 / status.total_bytes as f64;
+                let _ = self.status_tx.send(status.clone());
+            }
+            tracing::info!(
+                name = %info.name,
+                resumed_pieces = adopted,
+                total_pieces = num_pieces,
+                "verified existing data"
+            );
+        }
 
         // Peer discovery -- shared by tracker and DHT
         let (peer_tx, mut peer_rx) = mpsc::channel::<Vec<SocketAddr>>(64);

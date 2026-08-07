@@ -17,6 +17,48 @@ use super::probe::probe_file;
 static FFMPEG_AVAILABLE: OnceLock<bool> = OnceLock::new();
 static FFMPEG_VERSION: OnceLock<Option<String>> = OnceLock::new();
 
+/// A transcode output smaller than this is treated as broken, and its source is
+/// kept. ffmpeg reporting success with a truncated file is rare but the cost of
+/// believing it — deleting the only real copy — is unrecoverable.
+const MIN_PLAUSIBLE_OUTPUT_BYTES: u64 = 1024 * 1024;
+
+/// Delete the source a successful transcode just made redundant.
+///
+/// The entry is repointed at the output **before** the unlink, so it never
+/// references a file that is about to disappear. (The bulk `cleanup_sources`
+/// endpoint historically got this backwards, which is why a `fix-paths` repair
+/// endpoint exists.)
+fn reclaim_source(store: &Arc<Store>, media_id: Uuid, output: &std::path::Path) {
+    if !store.get_settings().delete_source_after_transcode {
+        return;
+    }
+    let Ok(Some(mut entry)) = store.get_media(&media_id) else {
+        return;
+    };
+    let Some(source) = crate::engine::cleanup::redundant_source(&entry, output) else {
+        return;
+    };
+    let output_size = std::fs::metadata(output).map_or(0, |m| m.len());
+    if output_size < MIN_PLAUSIBLE_OUTPUT_BYTES {
+        tracing::warn!(
+            media_id = %media_id, bytes = output_size,
+            "transcode output looks truncated — keeping the source"
+        );
+        return;
+    }
+
+    entry.media_file = output.to_path_buf();
+    if let Err(e) = store.put_media(&entry) {
+        tracing::error!(media_id = %media_id, error = %e, "could not repoint entry; keeping source");
+        return;
+    }
+
+    let (files, bytes) = crate::engine::cleanup::remove_files(media_id, &[source]);
+    if files > 0 {
+        tracing::info!(media_id = %media_id, bytes, "reclaimed source after transcode");
+    }
+}
+
 /// Check if ffmpeg is available on PATH. Result is cached.
 pub fn ffmpeg_available() -> bool {
     *FFMPEG_AVAILABLE.get_or_init(|| {
@@ -300,6 +342,8 @@ impl TranscodeRunner {
                             entry.audio_codec = Some("aac".into());
                             let _ = store.put_media(&entry);
                         }
+
+                        reclaim_source(&store, job.media_id, &job.output_path);
                     }
                     Err(e) => {
                         eprintln!("Transcode failed: {e}");

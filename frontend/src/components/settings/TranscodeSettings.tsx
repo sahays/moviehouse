@@ -72,6 +72,24 @@ export function TranscodeSettings({
       <div className="flex items-center justify-between py-3">
         <div>
           <Label className="text-sm text-[var(--color-text-secondary)]">
+            Delete source after transcode
+          </Label>
+          <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
+            HEVC is a remux — the MP4 is the same size as the source, so keeping
+            both doubles disk use. Turn off to keep originals.
+          </p>
+        </div>
+        <Switch
+          checked={settings.delete_source_after_transcode}
+          onCheckedChange={(val: boolean) =>
+            updateSetting("delete_source_after_transcode", val)
+          }
+        />
+      </div>
+
+      <div className="flex items-center justify-between py-3">
+        <div>
+          <Label className="text-sm text-[var(--color-text-secondary)]">
             Default encoding
           </Label>
           <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">

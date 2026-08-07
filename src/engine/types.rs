@@ -109,6 +109,17 @@ pub struct AppSettings {
     pub tmdb_api_key: String,
     pub transcode_concurrency: usize,
     pub transcode_dir: PathBuf,
+    /// Delete the source file once a transcode of it succeeds.
+    ///
+    /// On by default: the `hevc` preset is a remux, so the output is the same
+    /// size as the input and keeping both doubles the disk cost of every
+    /// download. Turn off to keep originals, and watch your free space.
+    #[serde(default = "default_true")]
+    pub delete_source_after_transcode: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -123,6 +134,7 @@ impl Default for AppSettings {
             tmdb_api_key: String::new(),
             transcode_concurrency: 2,
             transcode_dir: default_transcode_dir(),
+            delete_source_after_transcode: true,
         }
     }
 }
@@ -236,4 +248,23 @@ pub struct DownloadOptions {
     pub output_dir: std::path::PathBuf,
     pub no_dht: bool,
     pub lightspeed: bool,
+}
+
+impl DownloadOptions {
+    /// Inbound `BitTorrent` peer port — the one mapped on the router.
+    pub const DEFAULT_PEER_PORT: u16 = 6881;
+    /// Peer connections per download.
+    pub const DEFAULT_MAX_PEERS: usize = 80;
+
+    /// Options for a download started from the UI or resumed at startup.
+    #[must_use]
+    pub fn from_settings(settings: &AppSettings) -> Self {
+        Self {
+            port: Self::DEFAULT_PEER_PORT,
+            max_peers: Self::DEFAULT_MAX_PEERS,
+            output_dir: settings.download_dir.clone(),
+            no_dht: false,
+            lightspeed: settings.lightspeed,
+        }
+    }
 }

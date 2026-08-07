@@ -46,15 +46,33 @@ pub async fn delete_torrent(
     if opts.delete_files
         && let Ok(Some(record)) = state.store.get_download(&id)
     {
-        let download_dir = record.output_dir.join(&record.name);
-        if download_dir.exists() {
-            let _ = std::fs::remove_dir_all(&download_dir);
+        // Derived media first, while the entries still exist to name it.
+        //
+        // Transcodes and extracted subtitles live in `transcode_dir`, *outside*
+        // the torrent's own folder, so removing that folder alone leaves them
+        // behind forever — invisible to the app and impossible to clean up from
+        // the UI. That is how orphaned multi-GB MP4s accumulate.
+        let entries = state.store.list_media().unwrap_or_default();
+        let (mut files, mut bytes) = (0usize, 0u64);
+        for entry in entries.iter().filter(|e| e.download_id == id) {
+            let (f, b) = crate::engine::cleanup::remove_owned_files(entry);
+            files += f;
+            bytes += b;
+            let _ = state.store.remove_media(&entry.id);
         }
-        // Also try removing single file
-        let single_file = record.output_dir.join(&record.name);
-        if single_file.is_file() {
-            let _ = std::fs::remove_file(&single_file);
+
+        // Then the downloaded payload itself (a folder for multi-file torrents,
+        // a single file otherwise).
+        let payload = record.output_dir.join(&record.name);
+        if payload.is_dir() {
+            let _ = std::fs::remove_dir_all(&payload);
+        } else if payload.is_file() {
+            let _ = std::fs::remove_file(&payload);
         }
+        tracing::info!(
+            download_id = %id, name = %record.name, derived_files = files, derived_bytes = bytes,
+            "deleted download and its derived media"
+        );
     }
     state.manager.remove(&id);
     StatusCode::NO_CONTENT
@@ -165,14 +183,11 @@ pub async fn add_torrent(
                 .await;
 
                 match result {
-                    Ok((metainfo, _warm_peers)) => {
+                    Ok((metainfo, metainfo_bytes, _warm_peers)) => {
                         eprintln!(
                             "Magnet: metadata resolved — {} ({:.2} MiB)",
                             metainfo.info.name,
                             metainfo.info.total_length as f64 / (1024.0 * 1024.0),
-                        );
-                        let metainfo_bytes = crate::bencode::encode::encode(
-                            &crate::bencode::value::BValue::Bytes(vec![]),
                         );
                         manager
                             .resolve_magnet(placeholder_id, metainfo, metainfo_bytes, opts)
@@ -203,12 +218,5 @@ pub async fn add_torrent(
 }
 
 fn default_opts(store: &crate::engine::store::Store) -> DownloadOptions {
-    let settings = store.get_settings();
-    DownloadOptions {
-        port: 6881,
-        max_peers: 80,
-        output_dir: settings.download_dir,
-        no_dht: false,
-        lightspeed: settings.lightspeed,
-    }
+    DownloadOptions::from_settings(&store.get_settings())
 }

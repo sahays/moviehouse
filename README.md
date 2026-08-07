@@ -38,6 +38,9 @@ Single binary. No cloud. Your media, your network.
 
 ### BitTorrent Engine
 - **DHT, magnet links, PEX** — full peer discovery
+- **Resume across restarts** — unfinished downloads restart automatically and
+  rebuild progress by hashing what is already on disk, re-fetching only what is
+  missing or corrupt
 - **Endgame mode** — fast completion of last pieces
 - **Lightspeed mode** — adaptive pipelining, persistent DHT, PEX
 - **Security hardened** — path traversal protection, bencode limits, input validation
@@ -47,9 +50,12 @@ Single binary. No cloud. Your media, your network.
 - **Download folder** — configurable with server-side folder browser
 - **Auto-transcode** — toggle + default encoding (HEVC/H.264)
 - **TMDB API key** — loaded from `.env` file
-- **Clean Up Sources** — bulk: deletes the original (MKV) for anything already
-  transcoded, keeping the MP4 **and** the library entry. Distinct from the
-  per-title cleanup on the Already Watched rail, which removes everything
+- **Delete source after transcode** (on by default) — the HEVC preset is a remux,
+  so its MP4 is the same size as the source; keeping both doubles disk use. The
+  source is removed once the transcode succeeds
+- **Clean Up Sources** — bulk version of the same thing, for media transcoded
+  before that setting existed. Distinct from the per-title cleanup on the Already
+  Watched rail, which removes everything
 
 ## Quick Start
 
